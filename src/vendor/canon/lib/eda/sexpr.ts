@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 export type SourceSpan = {
   start: number;
   end: number;
@@ -259,4 +260,3 @@ export function allDescendants(node: SList, childHead?: string): SList[] {
 export function rootExpression(document: SList): SList | undefined {
   return directChildren(document)[0];
 }
-

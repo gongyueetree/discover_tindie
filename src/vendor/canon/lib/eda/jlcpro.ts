@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { KicadParseOutput } from "./kicad";
 import type {
   InputAsset,
@@ -10,6 +11,7 @@ import type {
   SourceRef,
 } from "./types";
 import { basename, decodeUtf8, diagnostic, point, sourceRef, stableId, withoutExtension } from "./util";
+import { easyEdaProSilk, emptySilkscreen } from "./easyeda-silk";
 
 type JsonObject = Record<string, unknown>;
 type RecordLine = unknown[];
@@ -481,6 +483,9 @@ function parsePcbRecords(
     };
   });
   output.nets.push(...pcbNets);
+  // Its silkscreen (local addition, ../NOTICE.md): the 3D view prints it.
+  const silkscreen = emptySilkscreen();
+  for (const record of records) easyEdaProSilk(record, silkscreen);
   output.pcbs.push({
     id: pcbId,
     documentId: stableId("document", asset.sha256, asset.relativePath),
@@ -495,6 +500,7 @@ function parsePcbRecords(
     tracks,
     vias,
     zones,
+    silkscreen,
     sourceRefs: [ref],
   });
   const known = new Set(["DOCTYPE", "CANVAS", "HEAD", "ACTIVE_LAYER", "LAYER", "LAYER_PHYS", "NET", "COMPONENT", "ATTR", "PAD_NET", "PAD", "LINE", "VIA", "POUR", "RULE", "CONNECT"]);
@@ -630,4 +636,3 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
   }
   return output;
 }
-

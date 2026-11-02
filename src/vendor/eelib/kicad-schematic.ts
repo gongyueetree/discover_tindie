@@ -1,5 +1,5 @@
-import { atom, childValue, directChildren, firstChild, head, parseSExpression, rootExpression, type SList } from "../canon/lib/eda/sexpr";
-import { arcPoints } from "../canon/lib/eda/view-geometry";
+import { atom, childValue, directChildren, firstChild, head, parseSExpression, rootExpression, type SList } from "@/vendor/canon/lib/eda/sexpr";
+import { arcPoints } from "@/vendor/canon/lib/eda/view-geometry";
 
 /**
  * A KiCad schematic sheet as drawing primitives, laid out the way Eeschema
@@ -65,7 +65,8 @@ export type SheetDrawing = {
   sheets: SheetHit[];
   /** The nets drawn on this sheet's wires, for the net list beside it. */
   nets: string[];
-  netPins?: Record<string, {reference:string;number:string;value:string}[]>;
+  /** Tindie extension: pins on each net (reference, pin number, value), for the net connection tree. */
+  netPins?: Record<string, { reference: string; number: string; value: string }[]>;
   skipped: Record<string, number>;
 };
 
@@ -624,10 +625,11 @@ export function drawSchematic(
 
   // The nets, from how the sheet connects (sheetConnectivity): each wire carries its group's name, and every named group is listed.
   const nets = new Set<string>();
+  // Tindie: pins on each net, for the viewer's net connection tree.
   const netPins: NonNullable<SheetDrawing["netPins"]> = {};
   for (const group of sheetConnectivity(root, { netOfWire, ...(netOfPin ? { netOfPin } : {}) })) {
     if (!group.name) continue;
-    netPins[group.name] = group.pins.map(({reference,number,value})=>({reference,number,value}));
+    netPins[group.name] = group.pins.map(({ reference, number, value }) => ({ reference, number, value }));
     if (group.wires.length > 0 || group.pins.length > 1) nets.add(group.name);
     for (const wire of group.wires) {
       const path = wirePath.get(wire);
@@ -872,4 +874,3 @@ function pinEnds(instance: SList, library: Map<string, SList>): SheetPinEnd[] {
   }
   return out;
 }
-

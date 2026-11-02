@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 /** Content signatures, not the shared .brd extension, distinguish Allegro from KiCad/EAGLE. */
 export function isAllegroBoard(bytes: Uint8Array): boolean {
   if (bytes.length < 256) return false;
@@ -27,4 +28,3 @@ export function readAllegroManifest(bytes: Uint8Array): AllegroManifest {
   if (!/\.brd$/i.test(m.source.path) || !/\.kicad_pcb$/i.test(m.board.path)) throw new Error("转换清单必须关联 BRD 与 KiCad PCB");
   return m;
 }
-

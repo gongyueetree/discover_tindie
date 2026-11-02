@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 // Legacy symbol fields are stored relative to the untransformed symbol origin.
 export function legacyFieldLayout(x:number,y:number,originX:number,originY:number,matrix:number[],vertical:boolean,justify:string){
  const dx=x-originX,dy=y-originY;
@@ -10,4 +11,3 @@ export function legacyFieldLayout(x:number,y:number,originX:number,originY:numbe
 export function legacyLabelRotation(kind:string,orientation:number){
  return (kind==='local'?[0,90,180,270]:[180,90,0,270])[orientation]??0;
 }
-

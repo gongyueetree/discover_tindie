@@ -1,6 +1,7 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import { unzipSync } from "fflate";
 import type { InputAsset, ParseDiagnostic } from "./types";
-import { decodeUtf8, diagnostic, extensionOf } from "./util";
+import { decodeUtf8, diagnostic, extensionOf, sourceRef } from "./util";
 
 const LIMITS = {
   maxCompressedBytes: 75 * 1024 * 1024,
@@ -18,6 +19,13 @@ function hasZipSignature(bytes: Uint8Array): boolean {
 
 type IgnoredEntryKind = "platform" | "history" | "vcs" | "eda_local";
 
+/**
+ * Altium's local history: `History/<name>.~(<n>).<Ext>.Zip`, a zipped earlier
+ * copy of a project document saved beside it (local change: ../../NOTICE.md).
+ * Never the live document, so never read as one.
+ */
+const ALTIUM_HISTORY_COPY = /\.~\(\d+\)\.(?:prjpcb|prjpcbstructure|schdoc|pcbdoc|schlib|pcblib|outjob|harness|bomdoc)(?:\.zip)?$/i;
+
 function ignoredEntryKind(path: string): IgnoredEntryKind | undefined {
   const segments = path.replace(/\\/g, "/").split("/");
   const name = segments.at(-1) ?? "";
@@ -25,6 +33,9 @@ function ignoredEntryKind(path: string): IgnoredEntryKind | undefined {
     return "platform";
   }
   if (segments.includes(".history")) return "history";
+  if (ALTIUM_HISTORY_COPY.test(name)) return "history";
+  // Altium's document previews (`__Previews/<doc>.SchDocPreview`): thumbnails it regenerates, not design data.
+  if (segments.slice(0, -1).some((segment) => segment.toLowerCase() === "__previews") || /\.(?:schdoc|pcbdoc|schlib|pcblib)preview$/i.test(name)) return "eda_local";
   if (segments.some((segment) => [".git", ".hg", ".svn"].includes(segment))) return "vcs";
   if (
     name.toLowerCase().endsWith(".kicad_prl") ||
@@ -52,31 +63,116 @@ function safePath(path: string): string {
   return normalized;
 }
 
-function inspectZip(bytes: Uint8Array): void {
+const latin1 = (raw: Uint8Array) => {
+  let out = "";
+  for (let i = 0; i < raw.length; i += 16384) out += String.fromCharCode(...raw.subarray(i, i + 16384));
+  return out;
+};
+const utf8Strict = new TextDecoder("utf-8", { fatal: true });
+const gb18030 = new TextDecoder("gb18030", { fatal: true });
+
+/**
+ * An entry's name as its writer meant it (local change: ../../NOTICE.md). The
+ * UTF-8 flag (bit 11) or Info-ZIP's Unicode Path field (0x7075) say so; a name
+ * with neither is in the writer's code page — UTF-8 when it reads as UTF-8,
+ * else GBK/GB18030, as Chinese Windows zip tools write it. Code page 437, the
+ * spec's default, is never right for a design: its box-drawing letters are not
+ * in file names anyone types.
+ */
+function entryName(raw: Uint8Array, flags: number, extra: Uint8Array): string {
+  if (flags & 0x0800) return decodeUtf8(raw);
+  const extraView = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
+  for (let at = 0; at + 4 <= extra.length; ) {
+    const id = extraView.getUint16(at, true), size = extraView.getUint16(at + 2, true);
+    if (id === 0x7075 && size >= 5 && at + 4 + size <= extra.length && extra[at + 4] === 1) return decodeUtf8(extra.subarray(at + 9, at + 4 + size));
+    at += 4 + size;
+  }
+  if (raw.every((byte) => byte < 0x80)) return latin1(raw);
+  try {
+    return utf8Strict.decode(raw);
+  } catch {
+    try {
+      return gb18030.decode(raw);
+    } catch {
+      return latin1(raw);
+    }
+  }
+}
+
+/** Where the central directory is, from the end record — past an archive comment, and ZIP64's when it is one. */
+function centralDirectory(bytes: Uint8Array, view: DataView): { offset: number; entries: number } {
+  // A real end record's comment runs exactly to the end of the file; failing that (bytes appended after it), the last one, as fflate reads it.
+  let found = -1;
+  for (let end = bytes.byteLength - 22; end >= 0 && end >= bytes.byteLength - 22 - 0xffff; end -= 1) {
+    if (view.getUint32(end, true) !== 0x06054b50) continue;
+    if (found < 0) found = end;
+    if (end + 22 + view.getUint16(end + 20, true) === bytes.byteLength) {
+      found = end;
+      break;
+    }
+  }
+  if (found >= 0) {
+    const end = found;
+    let entries = view.getUint16(end + 10, true);
+    let offset = view.getUint32(end + 16, true);
+    if ((entries === 0xffff || offset === 0xffffffff) && end >= 20 && view.getUint32(end - 20, true) === 0x07064b50) {
+      const record = Number(view.getBigUint64(end - 12, true));
+      if (record + 56 > bytes.byteLength || view.getUint32(record, true) !== 0x06064b50) throw new Error("SOURCE_FILE_CORRUPTED: invalid ZIP64 directory");
+      entries = Number(view.getBigUint64(record + 32, true));
+      offset = Number(view.getBigUint64(record + 48, true));
+    }
+    return { offset, entries };
+  }
+  throw new Error("SOURCE_FILE_CORRUPTED: ZIP central directory not found");
+}
+
+/**
+ * Checks the package against the intake limits, walking its central directory
+ * from the end record (local change: ../../NOTICE.md) — not by scanning every
+ * byte for a directory signature, which found ones inside stored nested
+ * archives and compressed data and judged the package by them. Returns each
+ * entry's name as fflate reads it (Latin-1 without the UTF-8 flag) mapped to
+ * its name as written.
+ */
+function inspectZip(bytes: Uint8Array): Map<string, string> {
   if (bytes.byteLength > LIMITS.maxCompressedBytes) {
     throw new Error("PARSER_RESOURCE_LIMIT: compressed package is too large");
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let entries = 0;
+  const names = new Map<string, string>();
   let compressedTotal = 0;
   let uncompressedTotal = 0;
+  const directory = centralDirectory(bytes, view);
+  if (directory.entries > LIMITS.maxEntries) throw new Error("ARCHIVE_BOMB_DETECTED: entry limit exceeded");
 
-  for (let offset = 0; offset + 46 <= bytes.byteLength; offset += 1) {
-    if (view.getUint32(offset, true) !== 0x02014b50) continue;
-    entries += 1;
-    if (entries > LIMITS.maxEntries) throw new Error("ARCHIVE_BOMB_DETECTED: entry limit exceeded");
-
+  let offset = directory.offset;
+  for (let entry = 0; entry < directory.entries; entry += 1) {
+    if (offset + 46 > bytes.byteLength || view.getUint32(offset, true) !== 0x02014b50) throw new Error("SOURCE_FILE_CORRUPTED: invalid ZIP directory");
     const flags = view.getUint16(offset + 8, true);
-    const compressed = view.getUint32(offset + 20, true);
-    const uncompressed = view.getUint32(offset + 24, true);
+    let compressed = view.getUint32(offset + 20, true);
+    let uncompressed = view.getUint32(offset + 24, true);
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
     const externalAttributes = view.getUint32(offset + 38, true);
     const nameStart = offset + 46;
     const nameEnd = nameStart + nameLength;
-    if (nameEnd > bytes.byteLength) throw new Error("SOURCE_FILE_CORRUPTED: invalid ZIP directory");
-    const path = decodeUtf8(bytes.subarray(nameStart, nameEnd));
+    if (nameEnd + extraLength > bytes.byteLength) throw new Error("SOURCE_FILE_CORRUPTED: invalid ZIP directory");
+    const raw = bytes.subarray(nameStart, nameEnd);
+    const extra = bytes.subarray(nameEnd, nameEnd + extraLength);
+    // ZIP64 sizes, in the order the spec gives them, for the fields that overflowed.
+    if (uncompressed === 0xffffffff || compressed === 0xffffffff) {
+      const extraView = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
+      for (let at = 0; at + 4 <= extra.length; at += 4 + extraView.getUint16(at + 2, true)) {
+        if (extraView.getUint16(at, true) !== 0x0001) continue;
+        let field = at + 4;
+        if (uncompressed === 0xffffffff && field + 8 <= extra.length) { uncompressed = Number(extraView.getBigUint64(field, true)); field += 8; }
+        if (compressed === 0xffffffff && field + 8 <= extra.length) compressed = Number(extraView.getBigUint64(field, true));
+        break;
+      }
+    }
+    const path = entryName(raw, flags, extra);
+    names.set(flags & 0x0800 ? decodeUtf8(raw) : latin1(raw), path);
     if (!path.endsWith("/")) safePath(path);
     if (flags & 0x0001) throw new Error("SECURITY_BLOCKED: encrypted ZIP entries are not accepted");
 
@@ -93,13 +189,14 @@ function inspectZip(bytes: Uint8Array): void {
     if (compressed > 0 && uncompressed / compressed > LIMITS.maxCompressionRatio) {
       throw new Error(`ARCHIVE_BOMB_DETECTED: suspicious compression ratio for ${path}`);
     }
-    offset = nameEnd + extraLength + commentLength - 1;
+    offset = nameEnd + extraLength + commentLength;
   }
 
-  if (entries === 0) throw new Error("SOURCE_FILE_CORRUPTED: ZIP central directory not found");
+  if (directory.entries === 0) throw new Error("SOURCE_FILE_CORRUPTED: ZIP central directory not found");
   if (compressedTotal > 0 && uncompressedTotal / compressedTotal > LIMITS.maxCompressionRatio) {
     throw new Error("ARCHIVE_BOMB_DETECTED: package compression ratio is too high");
   }
+  return names;
 }
 
 export async function filesToInputAssets(files: File[]): Promise<{
@@ -125,16 +222,17 @@ export async function filesToInputAssets(files: File[]): Promise<{
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (hasZipSignature(bytes)) {
-      inspectZip(bytes);
-      const entries = unzipSync(bytes);
+      const names = inspectZip(bytes);
+      const written = (name: string) => names.get(name) ?? name;
+      // Entries left out are not inflated: an Altium History folder can hold more than the project.
+      const entries = unzipSync(bytes, { filter: (file) => !written(file.name).endsWith("/") && !ignoredEntryKind(written(file.name)) });
+      for (const [name] of names) {
+        const entryKind = name.endsWith("/") ? undefined : ignoredEntryKind(written(name));
+        if (entryKind) ignoredEntries[entryKind] += 1;
+      }
       for (const [entryPath, entryBytes] of Object.entries(entries)) {
         if (entryPath.endsWith("/")) continue;
-        const path = safePath(entryPath);
-        const entryKind = ignoredEntryKind(path);
-        if (entryKind) {
-          ignoredEntries[entryKind] += 1;
-          continue;
-        }
+        const path = safePath(written(entryPath));
         if ([".zip", ".7z", ".rar", ".tar", ".gz"].includes(extensionOf(path))) {
           diagnostics.push(
             diagnostic(
@@ -142,7 +240,8 @@ export async function filesToInputAssets(files: File[]): Promise<{
               `嵌套压缩包 ${path} 已作为不透明附件保留，未继续解压。`,
               "warning",
               "security",
-              undefined,
+              // The nested archive itself, so a reading with no parts can name it (local change: ../../NOTICE.md).
+              sourceRef("", path),
               "preserved",
             ),
           );
@@ -171,7 +270,7 @@ export async function filesToInputAssets(files: File[]): Promise<{
     diagnostics.push(
       diagnostic(
         "PROJECT_HISTORY_IGNORED",
-        `已忽略 ${ignoredEntries.history} 个本地历史条目（.history）；历史快照不会作为当前工程重复解析。`,
+        `已忽略 ${ignoredEntries.history} 个本地历史条目（.history、Altium History/*.~(n).*.Zip）；历史快照不会作为当前工程重复解析。`,
         "information",
         "structure",
       ),
@@ -191,7 +290,7 @@ export async function filesToInputAssets(files: File[]): Promise<{
     diagnostics.push(
       diagnostic(
         "EDA_LOCAL_STATE_IGNORED",
-        `已忽略 ${ignoredEntries.eda_local} 个 EDA 本机状态、缓存或备份条目（如 .kicad_prl、fp-info-cache、*.bak、*-bak、锁文件或备份目录）。`,
+        `已忽略 ${ignoredEntries.eda_local} 个 EDA 本机状态、缓存或备份条目（如 .kicad_prl、fp-info-cache、*.bak、*-bak、锁文件、备份目录或 Altium __Previews）。`,
         "information",
         "structure",
       ),
@@ -249,4 +348,3 @@ export function createDemoFiles(): File[] {
     new File([pcb], "signal-beacon.kicad_pcb", { type: "text/plain" }),
   ];
 }
-

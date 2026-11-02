@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef, useEffect, useMemo } from "react";
+import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
 import {
   Upload,
   Download,
@@ -80,7 +81,7 @@ export default function Viewer({
       const b = await parseEdaProject(r.assets, r.diagnostics);
       if (!b.schematics.length && !b.pcbs.length)
         throw Error(
-          "No supported schematic or PCB found. Use KiCad or Eagle 6+ XML files; binary Eagle files must be exported as XML.",
+          "No supported schematic or PCB found. Supported: KiCad 5–9, EAGLE 6+ XML, Altium Designer, EasyEDA Standard and JLCEDA / EasyEDA Pro. Binary EAGLE files must be saved as XML first.",
         );
       setBundle(b);
       setVisited([]);
@@ -138,7 +139,7 @@ export default function Viewer({
         projects.find((p) => sub && p.directory.startsWith(sub + "/")) ||
         projects.find((p) => p.recommended) ||
         projects[0];
-      if (!choice) throw Error("No KiCad or Eagle project found at the pinned source.");
+      if (!choice) throw Error("No KiCad, EAGLE, Altium or EasyEDA / JLCEDA project found at the pinned source.");
       setStatus(`Importing ${choice.name} (${choice.fileCount} files)…`);
       const imp = await fetch("/api/maker/github/import", {
         method: "POST",
@@ -236,7 +237,7 @@ export default function Viewer({
         ref={input}
         type="file"
         multiple
-        accept=".zip,.kicad_sch,.kicad_pcb,.kicad_pro,.sch,.brd,.lbr,.step,.stp,.wrl,.SchDoc,.PcbDoc"
+        accept={CAD_ACCEPT}
         onChange={(e) => {
           if (e.target.files) void open(Array.from(e.target.files));
           e.target.value = "";
@@ -277,11 +278,12 @@ export default function Viewer({
               Choose project files
             </button>
             <small>
-              KiCad · Eagle 6+ XML · STEP / VRML models inside project ZIP
+              KiCad · EAGLE · Altium · EasyEDA · JLCEDA Pro — a project ZIP or its schematic and PCB files
             </small>
             <div className="privacy-note">
               <ShieldCheck size={16} /> Parsed locally. Nothing uploaded.
             </div>
+            <SupportedFormats />
           </div>
           <div className="example-row">
             <div>

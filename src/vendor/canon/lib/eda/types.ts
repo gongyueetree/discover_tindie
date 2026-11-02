@@ -1,4 +1,9 @@
-export type SourceFormat = "eagle" | "kicad" | "altium" | "allegro" | "easyeda" | "unknown";
+export type SourceFormat = "kicad" | "altium" | "allegro" | "easyeda" | "eagle" | "unknown";
+
+/** How a standard model was matched to a package (package-models.ts): the rules, the rule, what chose it, how well it fits. Local addition (../NOTICE.md). */
+export type StandardModelMatch = { rules: string; rule: string; from: "name" | "pads"; footprint: string; pads: number; pitch: number | null; fit: number; pin1: boolean };
+/** An Altium 3D body without a model (local addition): extruded from its outline, a cylinder (its outline a circle), or a sphere. */
+export type AltiumBody3d = { kind: "extruded" | "cylinder" | "sphere"; outline: [number, number][]; standoff: number; height: number; side: "top" | "bottom"; color?: string; opacity?: number; center?: [number, number]; radius?: number };
 
 export type DiagnosticSeverity =
   | "fatal"
@@ -205,8 +210,25 @@ export type PcbIr = {
     reference: string;
     value: string;
     libraryIdentifier: string;
-    models?: Array<{ path: string; offset: number[]; scale: number[]; rotation: number[]; hidden: boolean }>;
-    graphics?: Array<{ id: string; layer: string; kind: "line" | "arc" | "circle" | "rectangle"; geometry: Record<string, unknown> }>;
+    /** The footprint's own fields as the board writes them (KiCad 6+ `property`, KiCad 5 `fp_text`): Reference, Value, MPN… */
+    fields?: Record<string, string>;
+    /**
+     * `standard`: not the design's own model — a standard KiCad model matched by the package (an EAGLE board embeds
+     * none; package-models.ts), with how it was matched. Local addition (../NOTICE.md).
+     */
+    models?: Array<{ path: string; offset: number[]; scale: number[]; rotation: number[]; hidden: boolean; standard?: StandardModelMatch; name?: string }>;
+    /**
+     * Bodies the design draws without a model (Altium's extruded, cylinder and sphere 3D bodies): an outline in board
+     * millimetres (the IR's frame, as pads), raised from `standoff` to `height` above the face it is on; a sphere by
+     * its centre and radius. Local addition (../NOTICE.md).
+     */
+    bodies3d?: AltiumBody3d[];
+    /** `width`: the stroke width (mm), when the reader reads it. Local addition (../NOTICE.md). */
+    graphics?: Array<{ id: string; layer: string; kind: "line" | "arc" | "circle" | "rectangle"; geometry: Record<string, unknown>; width?: string }>;
+    /** Its texts on the silkscreen layers (reference designator and others), in its own frame like `graphics`. Local addition (../NOTICE.md). */
+    texts?: PcbText[];
+    /** Its polygons on the silkscreen layers (logos, pin-1 marks), in its own frame. Local addition (../NOTICE.md). */
+    polygons?: PcbPolygon[];
     position?: IrPoint;
     rotation: string;
     side: "front" | "back" | "unknown";
@@ -258,9 +280,40 @@ export type PcbIr = {
     sourceNativeNetId?: string;
     layers: string[];
     sourceRef: SourceRef;
+    /** The zone as drawn (mm, the reader's frame), when the reader reads it: a rule area or copper, its outline and, layer by layer, its fill. Local addition (../NOTICE.md). */
+    shape?: { keepout: boolean; outline: [number, number][]; fills: { layer: string | null; points: [number, number][] }[] };
   }>;
+  /** What the board itself draws on its silkscreen layers (not a footprint's), in board coordinates, when the reader reads it. Local addition (../NOTICE.md). */
+  silkscreen?: {
+    graphics: Array<{ id: string; layer: string; kind: "line" | "arc" | "circle" | "rectangle"; geometry: Record<string, unknown>; width?: string }>;
+    polygons: PcbPolygon[];
+    texts: PcbText[];
+  };
   sourceRefs: SourceRef[];
 };
+
+/**
+ * A text as the board file writes it: where (a footprint's own frame for a
+ * footprint's text, the board's for the board's), its angle on the board
+ * (degrees, counter-clockwise, as KiCad stores it), the character height and
+ * width and stroke (mm), how it is anchored, and whether it is mirrored (read
+ * from the back). Local addition (../NOTICE.md).
+ */
+export type PcbText = {
+  id: string;
+  layer: string;
+  kind: "reference" | "value" | "field" | "user";
+  text: string;
+  position: IrPoint;
+  angle: string;
+  size: { height: string; width: string };
+  thickness?: string;
+  justify: { horizontal: "left" | "center" | "right"; vertical: "top" | "center" | "bottom" };
+  mirrored: boolean;
+};
+
+/** A drawn polygon (mm): its corners, stroke width, and whether it is filled. Local addition (../NOTICE.md). */
+export type PcbPolygon = { id: string; layer: string; points: IrPoint[]; width?: string; filled: boolean };
 
 export type FidelityDimension = {
   status: "complete" | "substantially_complete" | "partial" | "structure_only" | "unknown";
@@ -350,4 +403,3 @@ export type InputAsset = {
   path: string;
   bytes: Uint8Array;
 };
-
