@@ -22,12 +22,12 @@ const requests = new Map<
   string,
   { until: number; promise: Promise<GraphData> }
 >();
-function getGraph(mpn: string) {
-  const key = mpn.toUpperCase();
+function getGraph(mpn: string, module = "") {
+  const key = module ? "module:" + module : mpn.toUpperCase();
   let hit = requests.get(key);
   if (!hit || hit.until < Date.now()) {
     const promise = fetch(
-      "/api/maker/graph?" + new URLSearchParams({ mpn }),
+      "/api/maker/graph?" + new URLSearchParams(module ? { module } : { mpn }),
     ).then(async (r) => {
       const d = await r.json();
       if (!r.ok) throw Error(d.error || "Graph unavailable");
@@ -46,10 +46,17 @@ export default function GraphEmbed({
   mpn = "",
   compact = false,
   triggerOnly = false,
+  module = "",
+  moduleName = "",
+  label = "View related components",
 }: {
   mpn?: string;
   compact?: boolean;
   triggerOnly?: boolean;
+  /** Circuit-module graph: that module's most used parts instead of one part's neighbours. */
+  module?: string;
+  moduleName?: string;
+  label?: string;
 }) {
   const [data, setData] = useState<GraphData | null>(null),
     [error, setError] = useState(""),
@@ -76,7 +83,7 @@ export default function GraphEmbed({
     setData(null);
     setError("");
     const timer = setTimeout(() => {
-      getGraph(mpn)
+      getGraph(mpn, module)
         .then((d) => {
           if (alive) setData(d);
         })
@@ -88,7 +95,7 @@ export default function GraphEmbed({
       alive = false;
       clearTimeout(timer);
     };
-  }, [mpn, attempt, triggerOnly, open]);
+  }, [mpn, module, attempt, triggerOnly, open]);
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -122,7 +129,7 @@ export default function GraphEmbed({
         <button
           className="btn small"
           onClick={() => setOpen(true)}
-          title="View related components"
+          title={label}
         >
           <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
             {[0, 1, 2, 3, 4, 5].map((i) => {
@@ -147,7 +154,7 @@ export default function GraphEmbed({
             })}
             <circle cx="16" cy="16" r="4" fill="#13a2b2" />
           </svg>
-          View related components
+          {label}
         </button>
       ) : (
         <>
@@ -258,21 +265,23 @@ export default function GraphEmbed({
               if (e.target === e.currentTarget) setOpen(false);
             }}
             onClose={(e) => e.stopPropagation()}
-            aria-label="Component relationships"
+            aria-label={module ? `Common parts · ${moduleName || module}` : "Component relationships"}
           >
             <div className="graph-dialog-bar">
-              <b>Component relationships</b>
+              <b>{module ? `Common parts · ${moduleName || module}` : "Component relationships"}</b>
               <button className="btn" autoFocus onClick={() => setOpen(false)}>
                 Close ×
               </button>
             </div>
             {data?.nodes.length ? (
-              <FullGraph key={data.scope.generatedAt + mpn} data={data} />
+              <FullGraph key={data.scope.generatedAt + mpn + module} data={data} moduleName={moduleName} />
             ) : (
               <p role="status">
                 {error ||
                   (data
-                    ? "No related components found."
+                    ? module
+                      ? "No designs are classified into this circuit module yet."
+                      : "No related components found."
                     : "Loading related components…")}
               </p>
             )}

@@ -508,6 +508,8 @@ export const CATEGORY_EN: Record<string, string> = {
 
 /** Chinese vendors commonly seen in ezPLM that are not in mfr_lineage.yaml. */
 const EXTRA_MANUFACTURERS: { name: string; match: string }[] = [
+  { name: "Raspberry Pi", match: "树莓派" },
+  { name: "Dongguan Huacaiwei Technology", match: "华彩威" },
   { name: "GigaDevice", match: "兆易" },
   { name: "Zbit Semiconductor", match: "恒烁" },
   { name: "Montage Technology", match: "澜起" },

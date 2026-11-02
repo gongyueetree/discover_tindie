@@ -64,6 +64,12 @@ export interface GraphData {
     sourceDate: string | null;
     matchedPart: string;
     eligibleNodes: number;
+    /** Set for a circuit-module graph: the module's most used families (designs using each). */
+    module?: {
+      id: string;
+      designs: number;
+      items: { family: string; label: string; manufacturer: string; count: number }[];
+    } | null;
   };
 }
 export function buildComponentGraph(designs: GraphDesign[], focus = "") {

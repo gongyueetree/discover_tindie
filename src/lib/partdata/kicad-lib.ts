@@ -3,6 +3,7 @@ import index from "@/data/kicad-index.json";
 import { previewFootprint, previewSymbol } from "@/vendor/eelib/ecad/preview";
 import { applySymbolTypography } from "@/lib/maker/symbol-typography";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
+import { pdGetRaw } from "./client";
 
 /**
  * Resolves the bare symbol / footprint names partdata returns ("STM32H503KBUx",
@@ -99,42 +100,81 @@ async function symbolLibraryText(library: string, name: string) {
 export type CadResult = {
   symbol: { preview: any; source?: string; reason?: string; library?: string };
   footprint: { preview: any; source?: string; reason?: string; library?: string };
-  model?: { path: string; revision: string } | null;
+  model?: { path: string; revision: string; url?: string } | null;
   revision: string;
 };
 
-export async function cadPreview(symbolName?: string | null, footprintName?: string | null): Promise<CadResult> {
+export type EzplmFiles = { partId: string; symbol: boolean; footprint: boolean; model: boolean };
+
+/** A part's file from ezPLM's own library, through partdata's signed /parts/{id}/cad/{kind}. */
+export async function ezplmFile(partId: string, kind: "symbol" | "footprint" | "model") {
+  if (!/^p_[a-z2-7]{8,40}$/.test(partId)) throw Error("bad_part");
+  return pdGetRaw(`/api/pub/v1/parts/${partId}/cad/${kind}`, kind === "model" ? { max: 15 * 1024 * 1024, cache: false } : {});
+}
+export const ezplmText = async (partId: string, kind: "symbol" | "footprint") =>
+  new TextDecoder().decode((await ezplmFile(partId, kind)).body);
+const bare = (v: string) => v.split(":").pop() || v;
+
+export async function cadPreview(symbolName?: string | null, footprintName?: string | null, ez?: EzplmFiles | null): Promise<CadResult> {
   const out: CadResult = { symbol: { preview: null }, footprint: { preview: null }, model: null, revision: TAG };
   const sym = resolveName("symbol", symbolName);
   const fp = resolveName("footprint", footprintName);
+  const ezDownload = (kind: string) => `/api/maker/cad/${ez!.partId}/${kind}`;
   await Promise.all([
     (async () => {
       if (!symbolName) return void (out.symbol.reason = "no_symbol_in_database");
-      if (!sym) return void (out.symbol.reason = "not_in_official_kicad_library");
-      try {
-        const text = await symbolLibraryText(sym.library, sym.name);
-        const preview = previewSymbol(text);
-        out.symbol = {
-          preview: applySymbolTypography(preview, text),
-          source: symbolUrl(sym.library, sym.name),
-          library: `${sym.library}:${sym.name}`,
-        };
-      } catch {
-        out.symbol.reason = "not_previewable";
-      }
+      if (sym)
+        try {
+          const text = await symbolLibraryText(sym.library, sym.name);
+          const preview = previewSymbol(text);
+          out.symbol = {
+            preview: applySymbolTypography(preview, text),
+            source: symbolUrl(sym.library, sym.name),
+            library: `${sym.library}:${sym.name}`,
+          };
+          return;
+        } catch {
+          out.symbol.reason = "not_previewable";
+        }
+      // Not in (or not drawable from) the official KiCad library: ezPLM's own library.
+      if (ez?.symbol)
+        try {
+          const text = await ezplmText(ez.partId, "symbol");
+          const name = bare(symbolName);
+          const preview = previewSymbol(text);
+          out.symbol = { preview: applySymbolTypography(preview, text), source: ezDownload("symbol"), library: `ezPLM:${name}` };
+          return;
+        } catch {
+          out.symbol.reason = "not_previewable";
+          return;
+        }
+      if (!sym) out.symbol.reason = "not_in_official_kicad_library";
     })(),
     (async () => {
       if (!footprintName) return void (out.footprint.reason = "no_footprint_in_database");
-      if (!fp) return void (out.footprint.reason = "not_in_official_kicad_library");
-      try {
-        const url = footprintUrl(fp.library, fp.name);
-        const text = await fetchText(url);
-        out.footprint = { preview: previewFootprint(text), source: url, library: `${fp.library}:${fp.name}` };
-        const m = text.match(/\(model\s+"?[^"\n)]*?([\w.-]+\.3dshapes\/[\w.+()-]+\.(?:step|stp|wrl))"?/i);
-        if (m) out.model = { path: m[1], revision: "master" };
-      } catch {
-        out.footprint.reason = "not_previewable";
-      }
+      if (fp)
+        try {
+          const url = footprintUrl(fp.library, fp.name);
+          const text = await fetchText(url);
+          out.footprint = { preview: previewFootprint(text), source: url, library: `${fp.library}:${fp.name}` };
+          const m = text.match(/\(model\s+"?[^"\n)]*?([\w.-]+\.3dshapes\/[\w.+()-]+\.(?:step|stp|wrl))"?/i);
+          if (m) out.model = { path: m[1], revision: "master" };
+          return;
+        } catch {
+          out.footprint.reason = "not_previewable";
+        }
+      if (ez?.footprint)
+        try {
+          const text = await ezplmText(ez.partId, "footprint");
+          const name = bare(footprintName);
+          out.footprint = { preview: previewFootprint(text), source: ezDownload("footprint"), library: `ezPLM:${name}` };
+          if (ez.model) out.model = { path: `ezPLM/${name}.step`, revision: "ezplm", url: ezDownload("model") };
+          return;
+        } catch {
+          out.footprint.reason = "not_previewable";
+          return;
+        }
+      if (!fp) out.footprint.reason = "not_in_official_kicad_library";
     })(),
   ]);
   return out;

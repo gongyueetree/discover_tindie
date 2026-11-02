@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Upload, Download, Check, ArrowRight } from "lucide-react";
+import { Upload, Download, Check, ArrowRight, CircleCheck, CircleHelp, CircleAlert } from "lucide-react";
 import { hasChinese, terminology } from "@/lib/maker/english";
 import { ToolHeading } from "./ToolShell";
 import {
@@ -209,57 +209,75 @@ export default function Bom({
       setBusy(false);
     }
   }
+  const [priceNote, setPriceNote] = useState("");
   async function pricing() {
     setBusy(true);
     setError("");
-    try {
-      for (const row of rows.filter((r) => r.selected)) {
-        try {
-          const p = row.selected!;
-          const r = await fetch(
-            "/api/maker/pricing/" +
-              encodeURIComponent(p.mpn) +
-              "?" +
-              new URLSearchParams({
-                manufacturer: p.manufacturer,
-                qty: String(row.quantity * build),
-              }),
-          );
-          const d = await r.json();
-          if (!r.ok) throw Error(d.error);
-          setRows((old) =>
-            old.map((x) =>
-              x.id === row.id
-                ? {
-                    ...x,
-                    priceError: d.offers.length
-                      ? undefined
-                      : "No live price available. Enter a manual price or configure supplier API credentials.",
-                    selected: {
-                      ...p,
-                      offers: [
-                        ...p.offers.filter(
-                          (o) =>
-                            !d.offers.some(
-                              (n: any) =>
-                                n.supplier === o.supplier && n.sku === o.sku,
-                            ),
-                        ),
-                        ...d.offers,
-                      ],
-                    },
-                  }
-                : x,
-            ),
-          );
-        } catch (e) {
-          setRows((old) =>
-            old.map((x) =>
-              x.id === row.id ? { ...x, priceError: String(e) } : x,
-            ),
-          );
-        }
+    const targets = rows.filter((r) => r.selected);
+    let done = 0,
+      priced = 0;
+    const problems = new Map<string, string>();
+    setPriceNote(`Checking supplier prices… 0 / ${targets.length}`);
+    async function one(row: BomRow) {
+      try {
+        const p = row.selected!;
+        const r = await fetch(
+          "/api/maker/pricing/" +
+            encodeURIComponent(p.mpn) +
+            "?" +
+            new URLSearchParams({
+              manufacturer: p.manufacturer,
+              qty: String(row.quantity * build),
+            }),
+        );
+        const d = await r.json();
+        if (!r.ok) throw Error(d.error || "Price lookup failed");
+        for (const s of (d.partialSources || []) as { source: string; status: string; message?: string }[])
+          if (s.status !== "ready")
+            problems.set(
+              s.source,
+              s.status === "unconfigured" ? s.source.replace(/ direct$/, "") + " is not connected on this site" : s.message || s.source + " failed",
+            );
+        if (d.offers.length) priced++;
+        setRows((old) =>
+          old.map((x) =>
+            x.id === row.id
+              ? {
+                  ...x,
+                  priceError: d.offers.length ? undefined : "No live price found.",
+                  selected: {
+                    ...p,
+                    offers: [
+                      ...p.offers.filter(
+                        (o) => !d.offers.some((n: any) => n.supplier === o.supplier && n.sku === o.sku),
+                      ),
+                      ...d.offers,
+                    ],
+                  },
+                }
+              : x,
+          ),
+        );
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setRows((old) => old.map((x) => (x.id === row.id ? { ...x, priceError: message } : x)));
+      } finally {
+        done++;
+        setPriceNote(`Checking supplier prices… ${done} / ${targets.length}`);
       }
+    }
+    try {
+      const queue = [...targets];
+      await Promise.all(
+        Array.from({ length: Math.min(4, queue.length) }, async () => {
+          for (let row = queue.shift(); row; row = queue.shift()) await one(row);
+        }),
+      );
+      setPriceNote(
+        `Live prices found for ${priced} of ${targets.length} matched lines.` +
+          (problems.size ? " " + [...problems.values()].join(" · ") + "." : "") +
+          (priced < targets.length ? " You can type a unit price for any line." : ""),
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -533,7 +551,7 @@ export default function Bom({
               disabled={busy || !rows.some((r) => r.selected)}
               onClick={() => void pricing()}
             >
-              Refresh supplier prices
+              {priceNote.startsWith("Checking") ? priceNote.replace("Checking supplier prices… ", "Checking prices ") : "Refresh supplier prices"}
             </button>
             {allowPlacement && (
               <button
@@ -586,6 +604,9 @@ export default function Bom({
             </label>
             <span className="badge">{rows.length} BOM lines</span>
           </div>
+          {priceNote && !priceNote.startsWith("Checking") && (
+            <p role="status" className="notice price-note">{priceNote}</p>
+          )}
           <div className="estimate-box">
             <div>
               <small>PRICED SUBTOTAL · USD</small>
@@ -617,7 +638,7 @@ export default function Bom({
                       "Qty",
                       "Value / package",
                       "MPN / manufacturer",
-                      "Status",
+                      "Match",
                       "Unit price · USD",
                       "Line total · USD",
                     ].map((v) => (
@@ -678,7 +699,7 @@ export default function Bom({
                         </small>
                       </td>
                       <td>
-                        <span className={"badge " + r.status}>{r.status}</span>
+                        <MatchMark status={r.status} />
                       </td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <input
@@ -826,5 +847,21 @@ export default function Bom({
         </>
       )}
     </>
+  );
+}
+
+const MATCH_MARK = {
+  exact: { Icon: CircleCheck, label: "MPN matched exactly" },
+  confirmed: { Icon: CircleCheck, label: "Match confirmed by you" },
+  review: { Icon: CircleAlert, label: "Candidates found, needs review" },
+  unmatched: { Icon: CircleHelp, label: "No MPN match" },
+} as const;
+/** Icon instead of a word: ✓ matched, ! needs review, ? not matched. */
+function MatchMark({ status }: { status: BomRow["status"] }) {
+  const { Icon, label } = MATCH_MARK[status] || MATCH_MARK.unmatched;
+  return (
+    <span className={"match-mark " + status} title={label} role="img" aria-label={label}>
+      <Icon size={22} strokeWidth={2.2} aria-hidden="true" />
+    </span>
   );
 }

@@ -356,3 +356,116 @@ export async function importGithub(selection: string, projectId: string) {
   );
   return { bytes: zipSync(data), name: project.name + ".zip" };
 }
+
+/* ------------------------------------------------------------------ README: intro + picture */
+
+export type ReadmeInfo = { intro: string | null; image: string | null; readmeUrl: string | null };
+const readmes = new Map<string, { until: number; value: Promise<ReadmeInfo> }>();
+const BADGE = /shields\.io|badge|travis-ci|circleci|codecov|coveralls|github\.com\/[^/]+\/[^/]+\/(?:actions|workflows)|gitter|liberapay|ko-fi|buymeacoffee|patreon|opencollective|zenodo|deepwiki|\.svg(?:\?|$)/i;
+
+/** Plain text from Markdown/HTML: drops code, images, badges, tables, headings and markup. */
+export function readmeIntro(md: string) {
+  const text = md
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, "\n\n")
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/<img[^>]*>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(p|div|h\d|table|tr|li|ul|ol)[^>]*>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+  const paras = text
+    .split(/\n\s*\n/)
+    .map((p) =>
+      p
+        .split("\n")
+        .filter((l) => !/^\s*(#{1,6}\s|\||[-=*_]{3,}\s*$|\[[^\]]+\]:\s)/.test(l))
+        .join(" ")
+        .replace(/[*_`]+/g, "")
+        .replace(/^\s*(?:[-*+]|\d+\.)\s+/, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter((p) => p.length >= 40 && /[a-z]{3}/i.test(p) && !/^(table of contents|license|copyright)\b/i.test(p));
+  let out = "";
+  for (const p of paras) {
+    if (out && out.length + p.length > 700) break;
+    out += (out ? "\n\n" : "") + p;
+    if (out.length > 320) break;
+  }
+  if (out.length > 700) out = out.slice(0, 690).replace(/\s+\S*$/, "") + "…";
+  return out || null;
+}
+
+/** First non-badge picture of a README, resolved against the README's raw location. */
+export function readmeImage(md: string, base: string) {
+  const re = /!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|<img[^>]+src=["']([^"']+)["']/gi;
+  for (let m = re.exec(md); m; m = re.exec(md)) {
+    const raw = (m[1] || m[2] || "").trim();
+    if (!raw || BADGE.test(raw)) continue;
+    try {
+      let u = new URL(raw, base);
+      // github.com/<repo>/blob/<ref>/<path> → raw file
+      const blob = u.hostname === "github.com" && u.pathname.match(/^\/([^/]+\/[^/]+)\/(?:blob|raw)\/(.+)$/);
+      if (blob) u = new URL(`https://raw.githubusercontent.com/${blob[1]}/${blob[2]}`);
+      if (u.protocol !== "https:" || u.username || u.password) continue;
+      if (!/\.(png|jpe?g|gif|webp)$/i.test(u.pathname) && !/user-attachments|user-images\.githubusercontent|githubusercontent\.com\/.+\/assets\//i.test(u.href)) continue;
+      return u.href;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * README of a public repository (optionally the folder the design lives in, falling back to
+ * the repository root): a short plain-text introduction and its first real picture.
+ * One GitHub API call per repository and folder, cached for a day (misses included).
+ */
+export function githubReadme(repo: string, commit: string | null, subdir = ""): Promise<ReadmeInfo> {
+  const key = `${repo}@${commit || ""}/${subdir}`;
+  const hit = readmes.get(key);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (readmes.size > 1000) readmes.clear();
+  const value = (async (): Promise<ReadmeInfo> => {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || (commit && !/^[\w.-]{1,100}$/.test(commit))) return { intro: null, image: null, readmeUrl: null };
+    const ref = commit ? `?ref=${commit}` : "";
+    const dirs = [...new Set([subdir.replace(/^\/+|\/+$/g, ""), ""])];
+    for (const dir of dirs) {
+      if (dir && !dir.split("/").every((x) => /^[^.][^/]*$/.test(x))) continue;
+      try {
+        const d = await github(`/repos/${repo}/readme${dir ? "/" + dir.split("/").map(encodeURIComponent).join("/") : ""}${ref}`);
+        if (d?.encoding !== "base64" || typeof d.content !== "string" || (d.size || 0) > 400_000) continue;
+        const md = Buffer.from(d.content, "base64").toString("utf8");
+        const base = typeof d.download_url === "string" ? d.download_url : `https://raw.githubusercontent.com/${repo}/${commit || "HEAD"}/${d.path || "README.md"}`;
+        return { intro: readmeIntro(md), image: readmeImage(md, base), readmeUrl: typeof d.html_url === "string" ? d.html_url : null };
+      } catch {
+        continue;
+      }
+    }
+    return { intro: null, image: null, readmeUrl: null };
+  })();
+  readmes.set(key, { until: Date.now() + 86_400_000, value });
+  return value;
+}
+
+/** owner/repo, ref and folder of a github.com repository / tree URL (null for anything else). */
+export function githubRepoOf(url: string) {
+  const m = url.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/tree\/([\w.-]+)(?:\/(.*?))?)?\/?$/);
+  if (!m) return null;
+  let subdir = "";
+  try {
+    subdir = m[3] ? decodeURIComponent(m[3]) : "";
+  } catch {
+    subdir = "";
+  }
+  return { repo: m[1], commit: m[2] || null, subdir };
+}

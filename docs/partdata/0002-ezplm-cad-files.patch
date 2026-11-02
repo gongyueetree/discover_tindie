@@ -1,0 +1,212 @@
+From e8c837110f4faeea7ac7763817e98e68f00cb803 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 2 Nov 2026 13:48:44 +0000
+Subject: [PATCH] feat(pub_api): serve a part's ezPLM symbol / footprint / 3D
+ files to partners
+
+- GET /api/pub/v1/parts/{id}/cad/{symbol|footprint|model}: signed, counted as a part
+  detail; .kicad_sym (with its root symbol), .kicad_mod and the footprint's .step from
+  ezPLM's own library (downloaded and cached as for the admin preview); fields with a
+  pending conflict are never served; 404 when ezPLM's library has no file
+- part detail carries ezplm_library {symbol, footprint, model} availability
+- previews: ezplm_symbol_lib / ezplm_footprint_by_name shared by preview and API
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018MWFKK7DmS3uJmhqWTQfJ4
+---
+ ezplm_pilot/previews.py | 35 ++++++++++++++++++++++----
+ ezplm_pilot/pub_api.py  | 54 +++++++++++++++++++++++++++++++++++++++++
+ tests/test_pub_api.py   | 45 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 129 insertions(+), 5 deletions(-)
+
+diff --git a/ezplm_pilot/previews.py b/ezplm_pilot/previews.py
+index 3f571d4..9f7bce5 100644
+--- a/ezplm_pilot/previews.py
++++ b/ezplm_pilot/previews.py
+@@ -249,8 +249,8 @@ def ezplm_footprint_preview(name: str, fetch: bool = True) -> dict | None:
+     return pv
+ 
+ 
+-def ezplm_symbol_preview(name: str, fetch: bool = True) -> dict | None:
+-    """ezPLM 符号（多为按型号命名、派生自通用根符号）：下载自身和根符号文件，拼起来渲染。"""
++def ezplm_symbol_lib(name: str, fetch: bool = True) -> tuple[str, str] | None:
++    """ezPLM 符号（多为按型号命名、派生自通用根符号）→ (完整的 kicad_symbol_lib 文本（自身 + 根符号）, 分类)。"""
+     from sqlalchemy import select
+     from .staging import EzSymbol, get_session
+     nm = (name or "").split(":")[-1].strip()
+@@ -275,16 +275,41 @@ def ezplm_symbol_preview(name: str, fetch: bool = True) -> dict | None:
+             except Exception:  # noqa
+                 pass
+         if f.exists():
+-            texts.insert(0, f.read_text("utf-8", "ignore"))
++            texts.append(f.read_text("utf-8", "ignore"))      # 自身在前、根符号在后（读第一个符号的工具拿到的是这个物料的）
+     if not texts:
+         return None
+     body = "".join(t[t.find("(symbol"):t.rstrip().rfind(")")] for t in texts if "(symbol" in t)
+-    pv = symrender.preview(f"(kicad_symbol_lib {body})", nm)
++    return f"(kicad_symbol_lib (version 20211014) (generator ezplm)\n{body})\n", row.category or ""
++
++
++def ezplm_symbol_preview(name: str, fetch: bool = True) -> dict | None:
++    """ezPLM 符号：下载自身和根符号文件，拼起来渲染。"""
++    got = ezplm_symbol_lib(name, fetch)
++    if not got:
++        return None
++    pv = symrender.preview(got[0], (name or "").split(":")[-1].strip())
+     if pv:
+-        pv["source"] = f"ezPLM 符号库（{row.category or ''}）"
++        pv["source"] = f"ezPLM 符号库（{got[1]}）"
+     return pv
+ 
+ 
++def ezplm_footprint_by_name(name: str, fetch: bool = True) -> dict | None:
++    """ezPLM 自建封装 → {"id", "category", "mod": Path|None, "step": Path|None}；没有这个封装时 None。"""
++    from sqlalchemy import select
++    from .staging import EzFootprint, get_session
++    nm = (name or "").split(":")[-1].strip()
++    if not nm:
++        return None
++    db = get_session()
++    try:
++        row = db.execute(select(EzFootprint).where(EzFootprint.name == nm).limit(1)).scalars().first()
++    finally:
++        db.close()
++    if not row:
++        return None
++    return {"id": row.id, "category": row.category or "", **ezplm_footprint_files(row.id, fetch)}
++
++
+ # --------------------------------------------------------------------------- 详情页汇总
+ def for_part(db, p, props, fetch: bool = True) -> dict:
+     """详情页三块：符号、封装、3D。每块给出预览和"它是哪个值、什么状态"。"""
+diff --git a/ezplm_pilot/pub_api.py b/ezplm_pilot/pub_api.py
+index ed00b0f..93afb51 100644
+--- a/ezplm_pilot/pub_api.py
++++ b/ezplm_pilot/pub_api.py
+@@ -311,9 +311,22 @@ def public_part(db, sp: StagedPart, full: bool = False) -> dict | None:
+             "datasheet_url": _url(sp.new_datasheet), "has_datasheet_in_ezplm": bool(sp.orig_has_pdf),
+             "product_url": _url(sp.orig_url) or _url(sp.new_url), "parameters": params,
+             "used_in_designs": n_designs, "withheld": sorted(disputed & {"symbol", "footprint"}) or None}
++    out["ezplm_library"] = _ezplm_library(db, out["symbol"], out["footprint"])
+     return out
+ 
+ 
++def _ezplm_library(db, symbol: dict | None, footprint: dict | None) -> dict | None:
++    """物料关联的符号 / 封装在 ezPLM 自建库里有没有文件（有就能用 /parts/{id}/cad/{kind} 下载）。"""
++    from .staging import EzFootprint, EzSymbol
++    sym = ((symbol or {}).get("value") or "").split(":")[-1].strip()
++    fp = ((footprint or {}).get("value") or "").split(":")[-1].strip()
++    s = db.execute(select(EzSymbol.id).where(EzSymbol.name == sym).limit(1)).first() if sym else None
++    f = db.execute(select(EzFootprint.has_3d).where(EzFootprint.name == fp).limit(1)).first() if fp else None
++    if not s and not f:
++        return None
++    return {"symbol": bool(s), "footprint": bool(f), "model": bool(f and f[0])}
++
++
+ def _parts_by_norm(db, keys: list[str]) -> dict[str, list]:
+     out = defaultdict(list)
+     for i in range(0, len(keys), 500):
+@@ -377,6 +390,47 @@ async def part_detail(part_id: str, ctx: dict = Depends(partner)):
+                                            "distributor": "Digi-Key / Mouser 查到、型号与厂商都对上的参数"})
+ 
+ 
++CAD_KINDS = {"symbol": ("application/x-kicad-symbol", "kicad_sym"), "footprint": ("application/x-kicad-footprint", "kicad_mod"),
++             "model": ("model/step", "step")}
++CAD_MAX_BYTES = 15 * 1024 * 1024
++
++
++@router.get("/parts/{part_id}/cad/{kind}")
++async def part_cad_file(part_id: str, kind: str, ctx: dict = Depends(partner)):
++    """物料关联的 ezPLM 自建库文件：symbol → .kicad_sym（自身 + 根符号），footprint → .kicad_mod，model → 封装的 .step。
++    只给 ezPLM 自建库里的（KiCad 官方库文件合作方自己取）；有未决冲突的字段不给；没有时 404。计入每天的物料详情数。"""
++    from fastapi.responses import Response
++    from . import previews
++    if kind not in CAD_KINDS:
++        _err("not_found", "kind 只能是 symbol / footprint / model", 404)
++    hdr = need(ctx, "parts:read")
++    db = ctx["db"]
++    ref = resolve(db, part_id, "part")
++    sp = db.get(StagedPart, ref) if ref else None
++    data = public_part(db, sp, full=True) if sp else None
++    if not data:
++        _err("not_found", "没有这个物料，或它没达到对外发布的质量要求", 404)
++    value = ((data.get("symbol" if kind == "symbol" else "footprint") or {}).get("value") or "").strip()
++    body, name = None, value.split(":")[-1].strip()
++    if value and kind == "symbol":
++        got = previews.ezplm_symbol_lib(value)
++        body = got[0].encode("utf-8") if got else None
++    elif value:
++        got = previews.ezplm_footprint_by_name(value)
++        path = got and got["mod" if kind == "footprint" else "step"]
++        if path and path.stat().st_size <= CAD_MAX_BYTES:
++            body = path.read_bytes()
++    if not body:
++        _err("not_found", "ezPLM 自建库里没有这个物料的文件", 404)
++    METER.detail(db, ctx["key"], ref)
++    db.commit()
++    media, ext = CAD_KINDS[kind]
++    safe = re.sub(r"[^\w.+-]", "_", name)[:80] or "part"
++    return Response(body, media_type=media, headers=hdr | {"Cache-Control": "private, max-age=86400",
++                                                           "Content-Disposition": f'attachment; filename="{safe}.{ext}"',
++                                                           "X-Content-Type-Options": "nosniff"})
++
++
+ @router.post("/bom/match")
+ async def bom_match(request: Request, ctx: dict = Depends(partner)):
+     """BOM 行 → 物料：exact（唯一对上）/ ambiguous（同号多家，要用户选）/ candidates（只有前缀对上）/ not_found。不替用户猜。"""
+diff --git a/tests/test_pub_api.py b/tests/test_pub_api.py
+index ac7293f..118798f 100644
+--- a/tests/test_pub_api.py
++++ b/tests/test_pub_api.py
+@@ -187,3 +187,48 @@ def test_partner_filters_function_stars_eda_footprint(client):
+     db.commit()
+     _clean(db)
+     db.close()
++
++
++def test_ezplm_library_files(client, tmp_path, monkeypatch):
++    """Tindie: a part's ezPLM symbol / footprint / 3D files, signed; only what ezPLM's own library has."""
++    from ezplm_pilot import previews
++    from ezplm_pilot.staging import EzFootprint, EzSymbol
++    from ezplm_pilot.web import _new_session
++    monkeypatch.setattr(previews, "EZ_CACHE", tmp_path)
++    monkeypatch.setattr(previews, "_ez_api", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
++    db = _new_session()
++    _seed(db)
++    db.query(StagedPart).filter(StagedPart.id == "pa-2").update({"orig_symbol": "ezlib:PUBSYM1", "orig_footprint": "PUBFP_QFN-8"})
++    db.merge(EzSymbol(id="ez-s1", name="PUBSYM1", category="Interface", root_id="ez-root", root_name="PUBROOT"))
++    db.merge(EzFootprint(id="ez-f1", name="PUBFP_QFN-8", category="Package_DFN_QFN", has_3d=True))
++    db.commit()
++    (tmp_path / "sym").mkdir()
++    (tmp_path / "sym" / "ez-s1.kicad_sym").write_text('(kicad_symbol_lib (version 20211014)\n  (symbol "PUBSYM1" (extends "PUBROOT"))\n)\n')
++    (tmp_path / "sym" / "ez-root.kicad_sym").write_text('(kicad_symbol_lib (version 20211014)\n  (symbol "PUBROOT" (pin input line (at 0 0 0) (length 2.54)))\n)\n')
++    (tmp_path / "fp" / "ez-f1").mkdir(parents=True)
++    (tmp_path / "fp" / "ez-f1" / "meta.json").write_text("{}")
++    (tmp_path / "fp" / "ez-f1" / "fp.kicad_mod").write_text('(footprint "PUBFP_QFN-8" (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))\n')
++    (tmp_path / "fp" / "ez-f1" / "model.step").write_bytes(b"ISO-10303-21;\nEND-ISO-10303-21;\n")
++    pub_api.METER.reset()
++    kid, sec = pub_api.new_key(db, "tindie", list(pub_api.SCOPES))
++    pid = next(x["id"] for x in call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485EN"}).json()["data"]["items"]
++               if x["manufacturer"] == "Acme")
++    detail = call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid}").json()["data"]
++    assert detail["ezplm_library"] == {"symbol": True, "footprint": True, "model": True}
++    sym = call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid}/cad/symbol")
++    assert sym.status_code == 200 and b'(symbol "PUBROOT"' in sym.content                              # 带根符号
++    assert sym.content.index(b'(symbol "PUBSYM1"') < sym.content.index(b'(symbol "PUBROOT"')           # 物料自己的在前
++    fp = call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid}/cad/footprint")
++    assert fp.status_code == 200 and fp.content.startswith(b'(footprint "PUBFP_QFN-8"') and 'filename="PUBFP_QFN-8.kicad_mod"' in fp.headers["content-disposition"]
++    step = call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid}/cad/model")
++    assert step.status_code == 200 and step.content.startswith(b"ISO-10303-21") and step.headers["content-type"].startswith("model/step")
++    assert call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid}/cad/netlist").status_code == 404
++    assert client.get(f"/api/pub/v1/parts/{pid}/cad/footprint").status_code == 401                  # 要签名
++    # 封装有未决冲突（pa-1）或不在 ezPLM 库里：不给
++    pid1 = next(x["id"] for x in call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485ECSA"}).json()["data"]["items"])
++    assert call(client, kid, sec, "GET", f"/api/pub/v1/parts/{pid1}/cad/footprint").status_code == 404
++    db.query(EzSymbol).filter(EzSymbol.id.like("ez-%")).delete(synchronize_session=False)
++    db.query(EzFootprint).filter(EzFootprint.id.like("ez-%")).delete(synchronize_session=False)
++    db.commit()
++    _clean(db)
++    db.close()
+-- 
+2.43.0
+

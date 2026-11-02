@@ -6,6 +6,8 @@
  * circuit module (ezplm_partdata module classification), Tindie's rules applied server-side
  * (full KiCad / EAGLE / Altium / EasyEDA / JLCEDA files, at least one GitHub star).
  */
+import Linkify from "./Linkify";
+import GraphEmbed from "./GraphEmbed";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -276,7 +278,9 @@ export default function Circuits() {
             ))}
             {!tree.length && !error && <span className="muted">Loading circuit modules…</span>}
           </div>
-          {topNode && !mpn && subOptions.length > 0 && (
+          {topNode && !mpn && (
+            <div className="atlas-sub-row">
+              {subOptions.length > 0 ? (
             <label className="atlas-sub">
               Sub-module
               <select value={module} onChange={(e) => chooseModule(e.target.value)}>
@@ -289,6 +293,11 @@ export default function Circuits() {
                 ))}
               </select>
             </label>
+              ) : (
+                <span />
+              )}
+              <GraphEmbed key={"module:" + module} module={module} moduleName={moduleName(module)} triggerOnly label="Common parts" />
+            </div>
           )}
           {list?.approximate && (
             <div className="notice info">
@@ -354,7 +363,11 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
           <button className="atlas-card-name" onClick={onOpen}>
             {d.name}
           </button>
-          {d.summary && <p className="atlas-card-summary">{d.summary}</p>}
+          {d.summary && (
+            <p className="atlas-card-summary">
+              <Linkify text={d.summary} />
+            </p>
+          )}
         </div>
         <div className="atlas-card-facts">
           <span>
@@ -398,7 +411,8 @@ function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
   const board = d.boardPreview ? `/api/maker/circuits/${d.id}/board.svg` : null;
   // Vendor designs: the picture their own page publishes (looked up on the server).
   const [sources, setSources] = useState<string[] | null>(
-    vendor || d.coverImageUrl === undefined ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
+    // No picture in the list → ask the server (README picture, then the PCB preview).
+    vendor || !d.coverImageUrl ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
   );
   const [index, setIndex] = useState(0);
   const host = useRef<HTMLSpanElement>(null);
@@ -410,7 +424,7 @@ function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
       io.disconnect();
       fetch(`/api/maker/circuits/${d.id}/cover`)
         .then((r) => (r.ok ? r.json() : { url: null }))
-        .then((x) => setSources(x.url ? [x.url] : []))
+        .then((x) => setSources([...new Set([x.url, vendor ? null : board].filter((v): v is string => !!v))]))
         .catch(() => setSources([]));
     });
     io.observe(el);
