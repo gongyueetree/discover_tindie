@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Search, ExternalLink, Box, ArrowRight, CircuitBoard, Star } from "lucide-react";
 import GraphEmbed from "./GraphEmbed";
+import { checkUsable } from "@/lib/maker/usable-client";
 import DatasheetReader from "./DatasheetReader";
 import CadPreview from "./CadPreview";
 import { ToolHeading } from "./ToolShell";
@@ -42,7 +43,8 @@ export default function Components() {
     [searched, setSearched] = useState(false),
     [refs, setRefs] = useState<DesignCard[]>([]),
     [refsTotal, setRefsTotal] = useState(0),
-    [refsState, setRefsState] = useState("");
+    [refsState, setRefsState] = useState(""),
+    [unusableRefs, setUnusableRefs] = useState<Set<string>>(new Set());
   const details = useRef(new Map<string, Part>());
 
   async function search(v = q, requireExact = false) {
@@ -129,6 +131,12 @@ export default function Components() {
         if (!r.ok) throw Error(d.error);
         setRefs(d.items || []);
         setRefsTotal(d.total || 0);
+        // Leave out designs whose repository holds no engineering files the viewer can open.
+        for (const x of (d.items || []) as DesignCard[])
+          if (x.kind === "open_source")
+            void checkUsable(x.id).then((ok) => {
+              if (ok === false && !ac.signal.aborted) setUnusableRefs((h) => new Set(h).add(x.id));
+            });
         setRefsState(d.items?.length ? "" : "No published open-hardware design uses this exact part yet.");
       })
       .catch((e) => {
@@ -329,7 +337,7 @@ export default function Components() {
                   Open hardware using this part{refsTotal ? ` · ${refsTotal}` : ""}
                 </h4>
                 {refsState && <p className="muted">{refsState}</p>}
-                {refs.map((r) => (
+                {refs.filter((r) => !unusableRefs.has(r.id)).map((r) => (
                   <a key={r.id} className="design-row" href={"/tools/circuits?design=" + encodeURIComponent(r.id)}>
                     <b>{r.name}</b>
                     <small>

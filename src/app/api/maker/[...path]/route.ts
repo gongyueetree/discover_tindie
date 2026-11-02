@@ -1,5 +1,5 @@
 import { translateTexts, englishParts } from "@/lib/maker/translation";
-import { scanGithub, importGithub, githubReadme, githubRepoOf } from "@/lib/maker/github-server";
+import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError } from "@/lib/maker/server";
 import { matchRow } from "@/lib/maker/bom";
@@ -183,6 +183,10 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
               (gh ? (await githubReadme(gh.repo, gh.commit, gh.subdir)).image : null) ||
               (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null),
       };
+    } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "usable") {
+      // Whether the design's repository holds files the viewer can open (null = could not tell).
+      const d = await designDetail(a, visitor);
+      result = { usable: d.kind === "vendor" ? true : /^https:\/\/github\.com\//.test(d.sourceUrl) ? await githubUsable(d.sourceUrl) : null };
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "about") {
       // Short introduction from the repository README (open-source designs only).
       const d = await designDetail(a, visitor);
@@ -318,7 +322,7 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
 }
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
-const PASSIVE = /^circuits\/[^/]+\/(cover|about|board\.svg)$|^modules$|^translate$/;
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^modules$|^translate$/;
 const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
   oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
 export const GET = charged;
