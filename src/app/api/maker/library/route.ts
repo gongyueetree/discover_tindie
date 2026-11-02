@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
-import { visitorHash } from "@/lib/partdata/client";
+import { visitorHash, oneVisitorCharge } from "@/lib/partdata/client";
 import { partDetail, searchPartdata } from "@/lib/partdata/maker";
-import { resolveName, footprintUrl } from "@/lib/partdata/kicad-lib";
+import { resolveName, footprintUrl, ezplmText } from "@/lib/partdata/kicad-lib";
 const API =
   "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2Fkicad-footprints";
 const REV = "10.0.0";
@@ -23,7 +23,11 @@ async function read(url: string, json = true) {
   cache.set(url, { at: Date.now(), data });
   return data;
 }
-export async function GET(req: NextRequest) {
+export function GET(req: NextRequest) {
+  return oneVisitorCharge(() => library(req));
+}
+
+async function library(req: NextRequest) {
   try {
     const q = req.nextUrl.searchParams;
     const kind = q.get("kind");
@@ -44,7 +48,19 @@ export async function GET(req: NextRequest) {
       const part = await partDetail(id, visitor);
       const fp = resolveName("footprint", part.footprintName);
       if (!part.footprintName) throw Error(`No footprint is recorded for ${part.mpn}`);
-      if (!fp) throw Error(`Footprint ${part.footprintName} is not in the official KiCad library`);
+      if (!fp && part.ezplmLibrary?.footprint) {
+        // Not in the official KiCad library: ezPLM's own library has it.
+        const name = part.footprintName.split(":").pop()!;
+        return NextResponse.json({
+          text: await ezplmText(id, "footprint"),
+          name: `ezPLM:${name}`,
+          source: "EZPLM",
+          url: `/api/maker/cad/${id}/footprint`,
+          revision: "ezplm",
+          model: part.ezplmLibrary.model,
+        });
+      }
+      if (!fp) throw Error(`Footprint ${part.footprintName} is not in the official KiCad library or ezPLM's library`);
       const url = footprintUrl(fp.library, fp.name);
       return NextResponse.json({
         text: await read(url, false),

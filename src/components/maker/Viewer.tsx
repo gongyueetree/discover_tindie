@@ -1,4 +1,5 @@
 "use client";
+import Linkify from "./Linkify";
 import { useState, useRef, useEffect, useMemo } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
 import {
@@ -212,7 +213,7 @@ export default function Viewer({
         title={design?.name || bundle?.project.name || "Look inside a project"}
         description={
           design
-            ? design.summary ||
+            ? (design.summary && <Linkify text={design.summary} />) ||
               (design.kind === "vendor"
                 ? "Published by the manufacturer. Open the vendor page for its files and terms."
                 : "Schematic, PCB, 3D and BOM, opened from the design's source files.")
@@ -450,8 +451,40 @@ export default function Viewer({
   );
 }
 
+function DesignAbout({ design }: { design: DesignInfo }) {
+  const [about, setAbout] = useState<{ intro: string | null; readmeUrl: string | null } | null>(null);
+  useEffect(() => {
+    if (design.kind !== "open_source") return;
+    const ac = new AbortController();
+    fetch(`/api/maker/circuits/${encodeURIComponent(design.id)}/about`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((x) => x && setAbout(x))
+      .catch(() => {});
+    return () => ac.abort();
+  }, [design.id, design.kind]);
+  const intro = about?.intro;
+  if (!intro || intro === design.summary) return null;
+  return (
+    <section className="design-about">
+      <h3>About this project</h3>
+      {intro.split("\n\n").map((p, i) => (
+        <p key={i}>
+          <Linkify text={p} />
+        </p>
+      ))}
+      {about?.readmeUrl && (
+        <a className="inline-link" href={about.readmeUrl} target="_blank" rel="noopener noreferrer">
+          Full README on GitHub <ExternalLink size={11} />
+        </a>
+      )}
+    </section>
+  );
+}
+
 function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef }) {
   return (
+    <>
+    <DesignAbout design={design} />
     <div className="design-meta">
       {design.kind === "vendor" ? (
         <span className="vendor-badge">Reference design{design.vendor ? ` · ${design.vendor}` : ""}</span>
@@ -476,6 +509,7 @@ function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef
       )}
       {design.bomWithheldReason && <p className="notice" style={{ width: "100%" }}>{design.bomWithheldReason}</p>}
     </div>
+    </>
   );
 }
 

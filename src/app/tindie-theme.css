@@ -526,3 +526,30 @@ dialog.maker { font-size: 14px; }
 }
 .maker .atlas-card-vendorpic { color: #9a6b08; font-weight: 600; font-size: 13px; background: #fdf8ec; }
 .maker .atlas-card-pic img.atlas-card-board { object-fit: contain; background: #1d4d2b; padding: 6px; }
+
+/* Line legend icons live inside .graph-canvas; keep them out of the canvas svg sizing. */
+.graph-canvas .graph-line-legend svg{width:26px;height:8px;min-height:0;flex:none;display:inline-block}
+.maker .match-mark{display:inline-flex;align-items:center;justify-content:center}
+.maker .match-mark.exact,.maker .match-mark.confirmed{color:#1a9e5b}
+.maker .match-mark.review{color:#e09a1b}
+.maker .match-mark.unmatched{color:#9aa6ab}
+.maker .price-note{margin:10px 0 0}
+/* Keep the inspector column the same width with or without a selected part,
+   so selecting a component does not resize (and visibly shift) the board. */
+.maker .viewer-body,
+.maker .viewer-body.has-component{grid-template-columns:minmax(0,1fr) 250px}
+.maker .inline-link{color:var(--teal,#129eae);text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}
+.maker .design-about{margin:0 0 14px;padding:16px 18px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.maker .design-about h3{font-size:14px;margin:0 0 8px}
+.maker .design-about p{font-size:13px;line-height:1.65;margin:0 0 8px;color:#4a5a60}
+.maker .design-about .inline-link{font-size:12px}
+.maker .module-common-parts{list-style:none;margin:0 0 16px;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.maker .module-common-parts button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}
+.maker .module-common-parts button:hover,.maker .module-common-parts button.active{border-color:#22b8c4;background:#f2fbfc}
+.maker .module-common-parts .rank{flex:none;width:22px;height:22px;border-radius:50%;background:#e6f6f8;color:#129eae;font-size:11px;font-weight:700;display:grid;place-items:center}
+.maker .module-common-parts .name{flex:1;min-width:0}
+.maker .module-common-parts .name b{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.maker .module-common-parts small{display:block;font-size:10px;color:#78858b;font-weight:400}
+.maker .module-common-parts .share{flex:none;text-align:right;font-size:13px;font-weight:700;color:#28383f}
+.maker .atlas-sub-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.maker .atlas-sub-row .graph-trigger{margin-left:auto}

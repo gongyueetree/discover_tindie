@@ -29,6 +29,24 @@ const routes: Record<string, (c: Call) => unknown> = {
     },
     meta: { pagination: { total: 3 } },
   }),
+  "/api/pub/v1/parts/p_ezezezezez": () => ({
+    data: { ...P("p_ezezezezez", "WS2812B-FIX", "Worldsemi"), symbol: { value: "EZ_WS2812B" }, footprint: { value: "EZ_LED_5050" },
+      used_in_designs: 0, ezplm_library: { symbol: true, footprint: true, model: false } },
+    meta: {},
+  }),
+  "/api/pub/v1/parts/p_ezezezezez/cad/footprint": () =>
+    new Response('(footprint "EZ_LED_5050" (layer "F.Cu") (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))', { headers: { "content-type": "application/x-kicad-footprint" } }),
+  "/api/pub/v1/parts/p_ezezezezez/cad/symbol": () =>
+    new Response('(kicad_symbol_lib (symbol "EZ_WS2812B" (symbol "EZ_WS2812B_1_1" (pin input line (at -5.08 0 0) (length 2.54) (name "DIN") (number "4")))))', { headers: { "content-type": "application/x-kicad-symbol" } }),
+  "/api/kg/v1/snapshots/current": () => ({ data: { snapshot_id: 1, designs: 40 }, meta: { computed_at: "2026-11-01T00:00:00Z" } }),
+  "/api/kg/v1/rankings/functions/mcu/families": () => ({
+    data: { items: [{ family: "RP2040", label: "RP2040", manufacturer: "树莓派", kind: "ic", adoption_count: 12 }, { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", kind: "ic", adoption_count: 9 }] },
+    meta: { denominator_count: 20, pagination: { total: 2 } },
+  }),
+  "/api/kg/v1/neighborhood": (c) => ({
+    data: { edges: c.url.searchParams.get("entity_id") === "fam:RP2040" ? [{ source: "RP2040", target: "W25Q128", support_count: 8, jaccard: 0.6 }] : [] },
+    meta: {},
+  }),
   "/api/pub/v1/bom/match": (c) => ({
     data: { lines: JSON.parse(c.body).lines.map((l: any) => ({ ref: l.ref, status: l.mpn === "STM32F103C8T6" ? "exact" : l.mpn === "LM358" ? "candidates" : "not_found", items: l.mpn === "STM32F103C8T6" ? [P("p_aaaaaaaaaa", "STM32F103C8T6")] : l.mpn === "LM358" ? [P("p_dddddddddd", "LM358DR", "Texas Instruments")] : [] })) },
     meta: {},
@@ -51,7 +69,8 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (mode === "down") throw new TypeError("fetch failed");
   if (mode === "quota") return Response.json({ error: { code: "visitor_quota_exceeded", message: "x", retryable: false } }, { status: 429 });
   const h = routes[url.pathname];
-  return h ? Response.json(h(c)) : Response.json({ error: { code: "not_found", message: "nf" } }, { status: 404 });
+  const out = h?.(c);
+  return out instanceof Response ? out : out !== undefined ? Response.json(out) : Response.json({ error: { code: "not_found", message: "nf" } }, { status: 404 });
 }) as typeof fetch;
 
 async function main() {
@@ -87,6 +106,39 @@ async function main() {
   assert.equal(await vendorImage("https://www.ti.com/tool/TIDA-00001"), "https://www.ti.com/content/dam/ticom/images/tida-00001.png");
   assert.equal(await vendorImage("https://evil.example/tool/x"), null, "unknown sites are not fetched");
   assert.equal(await vendorImage("http://www.ti.com/tool/TIDA-00001"), null, "HTTPS only");
+  // ezPLM's own library: CAD preview and download when the official KiCad library lacks the part
+  r = await get("cad/p_ezezezezez");
+  d = await r.json();
+  assert.equal(d.footprint.library, "ezPLM:EZ_LED_5050");
+  assert.ok(d.footprint.preview, "ezPLM footprint drawn");
+  assert.equal(d.symbol.library, "ezPLM:EZ_WS2812B");
+  assert.equal(d.footprint.source, "/api/maker/cad/p_ezezezezez/footprint", "download goes through this site, never a partdata URL");
+  r = await get("cad/p_ezezezezez/footprint");
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-disposition")!, /attachment; filename="EZ_LED_5050\.kicad_mod"/);
+  assert.match(await r.text(), /^\(footprint "EZ_LED_5050"/);
+  r = await get("cad/p_ezezezezez/model");
+  assert.equal(r.status, 404, "no model in ezPLM's library → 404 without asking partdata");
+  // circuit-module graph: the module's most used families and their co-occurrence
+  const { GET: graphGet } = await import("../src/app/api/maker/graph/route");
+  r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=mcu", { headers: { "x-forwarded-for": "203.0.113.9" } }));
+  d = await r.json();
+  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128"]);
+  assert.equal(d.edges.length, 1);
+  assert.deepEqual(d.scope.module, { id: "mcu", designs: 20, items: [
+    { family: "RP2040", label: "RP2040", manufacturer: "Raspberry Pi", count: 12 },
+    { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", count: 9 },
+  ] });
+  // one visitor action = one call attributed to the visitor; the fan-out counts only toward the key
+  const graphCalls = calls.filter((c) => c.url.pathname.startsWith("/api/kg/v1/"));
+  assert.ok(graphCalls.length >= 3, "graph fans out");
+  assert.equal(graphCalls.filter((c) => c.headers.get("X-End-User")).length, 1, "only the first graph call carries X-End-User");
+  r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=..%2Fx"));
+  assert.equal(r.status, 400);
+  // card pictures load by themselves: never attributed to the visitor
+  const nCover = calls.length;
+  await get("circuits/d_cccccccccc/cover");
+  assert.ok(calls.length > nCover && calls.slice(nCover).every((c) => !c.headers.get("X-End-User")), "passive lookups are not charged");
   // design ids are validated before any upstream call
   r = await get("circuits/../../etc");
   assert.equal(r.status, 404);

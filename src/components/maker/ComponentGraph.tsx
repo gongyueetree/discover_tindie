@@ -21,7 +21,8 @@ export function graphPositions(n: number) {
 import { KIND_COLORS as colors } from "./GraphEmbed";
 const REL = { co_occurrence: "Used together", alternative: "Alternative candidate", series: "Same-series candidate" } as const;
 const REL_COLOR: Record<string, string> = { [REL.co_occurrence]: "#159eae", [REL.alternative]: "#f2762e", [REL.series]: "#7b8fd6" };
-export default function ComponentGraph({ data }: { data: GraphData }) {
+export default function ComponentGraph({ data, moduleName = "" }: { data: GraphData; moduleName?: string }) {
+  const mod = data.scope.module || null;
   const parts = data.nodes.map((n) => [n.label, n.identity, n.count] as const);
   const edges = data.edges.map((e) => ({
     ...e,
@@ -143,12 +144,42 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
   }
   return (
     <>
-      <ToolHeading
-        eyebrow="Component knowledge graph"
-        title="Which parts go together — and which could replace them"
-        description="Component families that appear on the same boards across open-source designs. Dashed lines mark replacement candidates (e.g. RP2040 → RP2350). Select a family to see its designs, related families and candidate alternatives."
-      />
-      {data.scope.matchedPart && focusIndex < 0 && (
+      {mod ? (
+        <ToolHeading
+          eyebrow="Circuit module · common parts"
+          title={`Most used parts in ${moduleName || mod.id}`}
+          description={`Component families found most often in the ${mod.designs.toLocaleString()} open-source designs classified into this circuit module (sub-modules included), and which of them appear on the same boards.`}
+        />
+      ) : (
+        <ToolHeading
+          eyebrow="Component knowledge graph"
+          title="Which parts go together — and which could replace them"
+          description="Component families that appear on the same boards across open-source designs. Dashed lines mark replacement candidates (e.g. RP2040 → RP2350). Select a family to see its designs, related families and candidate alternatives."
+        />
+      )}
+      {mod && mod.items.length > 0 && (
+        <ol className="module-common-parts" aria-label="Most used parts">
+          {mod.items.slice(0, 12).map((it, i) => {
+            const at = data.nodes.findIndex((n) => n.id === it.family);
+            return (
+              <li key={it.family}>
+                <button type="button" className={at === selected ? "active" : ""} onClick={() => at >= 0 && setSelected(at)}>
+                  <span className="rank">{i + 1}</span>
+                  <span className="name">
+                    <b>{it.label}</b>
+                    {it.manufacturer && <small>{it.manufacturer}</small>}
+                  </span>
+                  <span className="share" title={`${it.count} of ${mod.designs} designs`}>
+                    {mod.designs ? Math.round((100 * it.count) / mod.designs) : 0}%
+                    <small>{it.count} designs</small>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {!mod && data.scope.matchedPart && focusIndex < 0 && (
         <p className="notice">
           {data.scope.matchedPart} is not in the graph yet (too few designs use it). Showing the most common families instead.
         </p>

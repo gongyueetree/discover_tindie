@@ -1,10 +1,10 @@
 import { translateTexts, englishParts } from "@/lib/maker/translation";
-import { scanGithub, importGithub } from "@/lib/maker/github-server";
+import { scanGithub, importGithub, githubReadme, githubRepoOf } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError } from "@/lib/maker/server";
 import { matchRow } from "@/lib/maker/bom";
-import { visitorHash, pdGetRaw } from "@/lib/partdata/client";
-import { cadPreview } from "@/lib/partdata/kicad-lib";
+import { visitorHash, pdGetRaw, oneVisitorCharge } from "@/lib/partdata/client";
+import { cadPreview, ezplmFile } from "@/lib/partdata/kicad-lib";
 import {
   partDetail,
   designsBy,
@@ -93,7 +93,25 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "cad" && path.length === 2 && PART_ID.test(a)) {
       // CAD drawn by eelib's preview engine from the official KiCad library entry partdata names.
       const part = await partDetail(a, visitor);
-      result = { mpn: part.mpn, ...(await cadPreview(part.symbolName, part.footprintName)) };
+      const ez = part.ezplmLibrary ? { partId: a, ...part.ezplmLibrary } : null;
+      result = { mpn: part.mpn, ...(await cadPreview(part.symbolName, part.footprintName, ez)) };
+    } else if (req.method === "GET" && head === "cad" && path.length === 3 && PART_ID.test(a) && ["symbol", "footprint", "model"].includes(path[2])) {
+      // A part's file from ezPLM's own library (partdata signs and meters the request).
+      const kind = path[2] as "symbol" | "footprint" | "model";
+      const part = await partDetail(a, visitor);
+      if (!part.ezplmLibrary?.[kind]) throw new SourceError("ezPLM's library has no such file for this part.", 404);
+      const file = await ezplmFile(a, kind);
+      const name = ((kind === "symbol" ? part.symbolName : part.footprintName) || part.mpn).split(":").pop()!.replace(/[^\w.+-]/g, "_").slice(0, 80);
+      const ext = { symbol: "kicad_sym", footprint: "kicad_mod", model: "step" }[kind];
+      return new Response(file.body as BodyInit, {
+        headers: {
+          "Content-Type": kind === "model" ? "model/step" : "text/plain; charset=utf-8",
+          "Content-Disposition": `${kind === "model" ? "inline" : "attachment"}; filename="${name}.${ext}"`,
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+          "Cache-Control": "private, max-age=3600",
+        },
+      });
     } else if (req.method === "GET" && head === "pricing" && path.length === 2) {
       /* ------------------------------------------------- distributor quotes (optional) */
       const mpn = decodeURIComponent(a).slice(0, 120);
@@ -147,12 +165,21 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "cover") {
       // For a parts database whose design list does not carry pictures yet: one design's picture.
       const d = await designDetail(a, visitor);
+      const gh = d.kind === "open_source" ? githubRepoOf(d.sourceUrl) : null;
       result = {
         url:
           d.kind === "vendor"
             ? await vendorImage(d.sourceUrl)
-            : d.coverImageUrl || (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null),
+            : d.coverImageUrl ||
+              (gh ? (await githubReadme(gh.repo, gh.commit, gh.subdir)).image : null) ||
+              (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null),
       };
+    } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "about") {
+      // Short introduction from the repository README (open-source designs only).
+      const d = await designDetail(a, visitor);
+      const gh = d.kind === "open_source" ? githubRepoOf(d.sourceUrl) : null;
+      const info = gh ? await githubReadme(gh.repo, gh.commit, gh.subdir) : null;
+      result = { intro: info?.intro || null, readmeUrl: info?.readmeUrl || null };
     } else if (req.method === "GET" && head === "circuits" && path.length === 2 && DESIGN_ID.test(a)) {
       const design = await designDetail(a, visitor);
       result = { design, github: design.kind === "open_source" ? githubSource(design.sourceUrl) : null };
@@ -281,5 +308,9 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
   return out;
 }
 
-export const GET = handle;
-export const POST = handle;
+// Card pictures and README intros load by themselves as the visitor scrolls: never charged.
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|board\.svg)$|^modules$|^translate$/;
+const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
+  oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
+export const GET = charged;
+export const POST = charged;

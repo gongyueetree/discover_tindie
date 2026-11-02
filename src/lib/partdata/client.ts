@@ -1,5 +1,25 @@
 import "server-only";
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+/**
+ * partdata counts every call that carries X-End-User against that visitor's daily allowance.
+ * One visitor action (a search, opening the graph, a BOM match) fans out into many upstream
+ * calls, so within one request to this site only the FIRST upstream call is attributed to the
+ * visitor; the rest count only toward the partner key's daily total. Passive lookups the
+ * visitor did not ask for (card pictures, README intros) are never attributed.
+ */
+const visitorScope = new AsyncLocalStorage<{ charged: boolean }>();
+export function oneVisitorCharge<T>(fn: () => T, { passive = false }: { passive?: boolean } = {}): T {
+  return visitorScope.run({ charged: passive }, fn);
+}
+function attribute(visitor?: string) {
+  const scope = visitorScope.getStore();
+  if (!visitor || !scope) return visitor;
+  if (scope.charged) return undefined;
+  scope.charged = true;
+  return visitor;
+}
 
 /**
  * Signed server-side client for the ezPLM data platform Partner API
@@ -97,6 +117,7 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
       503,
       "unconfigured",
     );
+  visitor = attribute(visitor);
   const qs = canonicalQuery(query);
   const raw = body === undefined ? "" : JSON.stringify(body);
   const ts = Math.floor(Date.now() / 1000).toString();
@@ -200,8 +221,11 @@ export async function pdProbe() {
 const raws = new Map<string, { until: number; value: Promise<{ type: string; body: Uint8Array }> }>();
 
 /** Signed GET of a non-JSON resource (e.g. a design's board.svg), cached for an hour; at most 2 MB. */
-export function pdGetRaw(path: string): Promise<{ type: string; body: Uint8Array }> {
-  const hit = raws.get(path);
+export function pdGetRaw(
+  path: string,
+  { max = 2 * 1024 * 1024, cache = true }: { max?: number; cache?: boolean } = {},
+): Promise<{ type: string; body: Uint8Array }> {
+  const hit = cache ? raws.get(path) : undefined;
   if (hit && hit.until > Date.now()) return hit.value;
   if (raws.size > 300) raws.clear();
   const value = (async () => {
@@ -213,7 +237,7 @@ export function pdGetRaw(path: string): Promise<{ type: string; body: Uint8Array
       r = await fetch(BASE() + path, {
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(45000),
         headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
       });
     } catch {
@@ -221,11 +245,12 @@ export function pdGetRaw(path: string): Promise<{ type: string; body: Uint8Array
     }
     if (!r.ok) throw new PartdataError(r.status === 404 ? "Not found." : `HTTP ${r.status}`, r.status === 404 ? 404 : 502);
     const len = Number(r.headers.get("content-length") || 0);
-    if (len > 2 * 1024 * 1024) throw new PartdataError("Preview too large.", 502);
+    if (len > max) throw new PartdataError("File too large.", 502);
     const body = new Uint8Array(await r.arrayBuffer());
-    if (body.length > 2 * 1024 * 1024) throw new PartdataError("Preview too large.", 502);
+    if (body.length > max) throw new PartdataError("File too large.", 502);
     return { type: r.headers.get("content-type") || "application/octet-stream", body };
   })();
+  if (!cache) return value;
   raws.set(path, { until: Date.now() + 3600_000, value });
   value.catch(() => raws.delete(path));
   return value;

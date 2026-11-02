@@ -41,6 +41,8 @@ export type Part = {
   withheld?: string[] | null;
   /** True once the detail endpoint was read (list items carry only the summary). */
   detailed?: boolean;
+  /** Files ezPLM's own library has for this part (served by partdata /parts/{id}/cad/{kind}). */
+  ezplmLibrary?: { symbol: boolean; footprint: boolean; model: boolean } | null;
   hasDatasheetInEzplm?: boolean;
 };
 export type Circuit = {

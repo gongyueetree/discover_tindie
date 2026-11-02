@@ -59,6 +59,9 @@ export function toPart(p: any): Part {
     fieldSources,
     withheld: p.withheld ?? null,
     hasDatasheetInEzplm: !!p.has_datasheet_in_ezplm,
+    ezplmLibrary: p.ezplm_library
+      ? { symbol: !!p.ezplm_library.symbol, footprint: !!p.ezplm_library.footprint, model: !!p.ezplm_library.model }
+      : null,
     detailed: "used_in_designs" in p,
     ...(hasCjk(String(p.manufacturer || "")) || hasCjk(String(p.description || ""))
       ? { originalText: { description: String(p.description || ""), parameters: {} } }
@@ -308,7 +311,7 @@ function nodeOf(id: string, label: string, manufacturer: string | null, kind: st
  * - focus given: the family's one-hop neighbourhood (same-board co-occurrence).
  * - no focus: the most common IC families, linked where they co-occur with each other.
  */
-export async function kgGraph(focus: string, visitor: string): Promise<GraphData> {
+export async function kgGraph(focus: string, visitor: string, module = ""): Promise<GraphData> {
   const snap = await pdGet(`${KG}/snapshots/current`, {}, visitor);
   const N = Number(snap.data.designs) || 0;
   const nodes: GraphNode[] = [];
@@ -339,7 +342,29 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
   };
   let matched = "";
   let eligible = 0;
-  if (focus) {
+  let moduleScope: { id: string; designs: number; items: { family: string; label: string; manufacturer: string; count: number }[] } | null = null;
+  if (module) {
+    // Circuit-module view: the families used most by designs classified into this module
+    // (with its sub-modules), and how those families co-occur with each other.
+    const rank = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(module)}/families`, { limit: 20 }, visitor);
+    const items = rank.data.items || [];
+    for (const f of items) add(node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));
+    moduleScope = {
+      id: module,
+      designs: Number(rank.meta?.denominator_count) || 0,
+      items: items.map((f: any) => ({
+        family: f.family,
+        label: f.label || f.family,
+        manufacturer: manufacturerEn(f.manufacturer || ""),
+        count: Number(f.adoption_count) || 0,
+      })),
+    };
+    eligible = Number(rank.meta?.pagination?.total) || nodes.length;
+    const hoods = await Promise.allSettled(
+      nodes.slice(0, 12).map((n) => pdGet(`${KG}/neighborhood`, { entity_id: `fam:${n.id}`, limit: 80, sort: "n" }, visitor)),
+    );
+    for (const h of hoods) if (h.status === "fulfilled") addEdges(h.value.data);
+  } else if (focus) {
     const fam = await resolveFamily(focus, visitor);
     if (fam) {
       matched = fam;
@@ -349,7 +374,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
       eligible = nodes.length;
     }
   }
-  if (!nodes.length) {
+  if (!nodes.length && !module) {
     const rank = await pdGet(`${KG}/rankings/families`, { kind: "ic", limit: 18 }, visitor);
     for (const f of rank.data.items || []) add(node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));
     eligible = Number(rank.meta?.pagination?.total) || nodes.length;
@@ -359,7 +384,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
     );
     for (const h of hoods) if (h.status === "fulfilled") addEdges(h.value.data);
   }
-  await addReplacements(nodes, edges, add, matched, visitor);
+  if (!module) await addReplacements(nodes, edges, add, matched, visitor);
   return {
     nodes,
     edges,
@@ -376,6 +401,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
       eligibleNodes: Math.max(eligible, nodes.length),
       snapshotId: snap.data.snapshot_id,
       basis: "Same-board co-occurrence across representative open-source designs",
+      module: moduleScope,
     } as any,
   };
 }
@@ -493,7 +519,14 @@ export async function plannerParts(q: string, visitor: string) {
   const parts: Part[] = listed
     ? rows.map(toPart)
     : (await Promise.allSettled(rows.slice(0, 12).map((x) => partDetail(x.id, visitor)))).flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
-  return parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
+  const kicad = parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
+  // Footprints not in the official KiCad library may be in ezPLM's own library (details say so).
+  const others = parts.filter((p) => p.footprintName && !resolveName("footprint", p.footprintName)).slice(0, 8);
+  const ez = (await Promise.allSettled(others.map((p) => partDetail(p.id, visitor)))).flatMap((s) =>
+    s.status === "fulfilled" && s.value.ezplmLibrary?.footprint ? [s.value] : [],
+  );
+  const keep = new Set([...kicad, ...ez].map((p) => p.id));
+  return parts.map((p) => ez.find((x) => x.id === p.id) || p).filter((p) => keep.has(p.id));
 }
 
 /* ------------------------------------------------------------------ vendor design pictures */

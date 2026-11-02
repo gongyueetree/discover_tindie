@@ -92,6 +92,59 @@ FIXTURE_COMBOS = [
 PASSIVES = [("C1,C2", "100nF"), ("R1", "10K"), ("R2,R3", "4.7K"), ("C3", "10uF")]
 
 
+# A part whose symbol / footprint exist only in ezPLM's own library (clearly named fixtures:
+# the files below are hand-written test geometry, not real library content).
+EZ_PART = ("WS2812B-TINDIEFIX", "Worldsemi", "LED", "Addressable RGB LED, 5050 (local ezPLM-library fixture)",
+           "EZFIXTURE_WS2812B", "EZFIXTURE_LED-SMD_4P_5.0x5.0mm", "", {"Package": "5050"})
+EZ_SYM = """(kicad_symbol_lib (version 20211014) (generator ezfixture)
+  (symbol "EZFIXTURE_WS2812B" (pin_names (offset 0.254)) (in_bom yes) (on_board yes)
+    (property "Reference" "D" (at 0 8.89 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "EZFIXTURE_WS2812B" (at 0 -8.89 0) (effects (font (size 1.27 1.27))))
+    (symbol "EZFIXTURE_WS2812B_0_1" (rectangle (start -5.08 6.35) (end 5.08 -6.35) (stroke (width 0.254)) (fill (type background))))
+    (symbol "EZFIXTURE_WS2812B_1_1"
+      (pin power_in line (at 0 8.89 270) (length 2.54) (name "VDD" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin output line (at 7.62 0 180) (length 2.54) (name "DOUT" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      (pin power_in line (at 0 -8.89 90) (length 2.54) (name "VSS" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+      (pin input line (at -7.62 0 0) (length 2.54) (name "DIN" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)
+"""
+EZ_FP = """(footprint "EZFIXTURE_LED-SMD_4P_5.0x5.0mm" (version 20240108) (generator ezfixture) (layer "F.Cu")
+  (attr smd)
+  (fp_line (start -2.5 -2.5) (end 2.5 -2.5) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+  (fp_line (start 2.5 -2.5) (end 2.5 2.5) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+  (fp_line (start 2.5 2.5) (end -2.5 2.5) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+  (fp_line (start -2.5 2.5) (end -2.5 -2.5) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+  (pad "1" smd rect (at -2.45 -1.65) (size 1.5 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at -2.45 1.65) (size 1.5 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "3" smd rect (at 2.45 1.65) (size 1.5 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "4" smd rect (at 2.45 -1.65) (size 1.5 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
+)
+"""
+
+
+def seed_ezplm_library(db, ids):
+    """One part whose symbol / footprint only ezPLM's library has, with its files in partdata's ezPLM cache."""
+    from ezplm_pilot import previews
+    from ezplm_pilot.staging import EzFootprint, EzSymbol
+    mpn, mfr, cat, den, sym, fp, ds, params = EZ_PART
+    db.add(StagedPart(id="fx-part-ez", mpn=mpn, mpn_norm=norm_mpn(mpn), manufacturer=mfr, orig_category_id=CAT_IC, orig_category=cat,
+                      description_en=den, orig_symbol=sym, orig_footprint=fp, new_params_json=json.dumps(params), value_score=5, status="量产"))
+    ids[norm_mpn(mpn)] = "fx-part-ez"
+    db.query(EzSymbol).filter(EzSymbol.id == "ezfix-sym").delete()
+    db.query(EzFootprint).filter(EzFootprint.id == "ezfix-fp").delete()
+    db.add(EzSymbol(id="ezfix-sym", name=sym, category="LED"))
+    db.add(EzFootprint(id="ezfix-fp", name=fp, category="LED_SMD", has_3d=False))
+    db.commit()
+    (previews.EZ_CACHE / "sym").mkdir(parents=True, exist_ok=True)
+    (previews.EZ_CACHE / "sym" / "ezfix-sym.kicad_sym").write_text(EZ_SYM)
+    d = previews.EZ_CACHE / "fp" / "ezfix-fp"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text("{}")
+    (d / "fp.kicad_mod").write_text(EZ_FP)
+
+
 def main():
     db = _new_session()
     # Clean previous fixtures.
@@ -111,6 +164,7 @@ def main():
                           description_en=den, orig_symbol=sym or None, orig_footprint=fp or None, new_datasheet=ds or None,
                           new_params_json=json.dumps(params), value_score=50 - i, status="量产"))
     db.commit()
+    seed_ezplm_library(db, ids)
 
     def add_design(bid, name, items, repo=None, commit=None, subdir=None, stars=None, lic="MIT", vendor_url=None):
         db.add(OshwBom(bom_id=bid, bom_no=bid.upper(), project_id=bid, project_name=name, gh_repo=repo, commit_=commit, subdir=subdir,

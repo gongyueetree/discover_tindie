@@ -16,13 +16,13 @@ type Side<T> = { preview?: T | null; reason?: string; source?: string; library?:
 type Cad = {
   symbol?: Side<SymbolPreview>;
   footprint?: Side<FootprintPreview>;
-  model?: { path: string; revision: string } | null;
+  model?: { path: string; revision: string; url?: string } | null;
   revision?: string;
 };
 const REASON: Record<string, string> = {
   no_symbol_in_database: "No symbol is recorded for this part.",
   no_footprint_in_database: "No footprint is recorded for this part.",
-  not_in_official_kicad_library: "Not in the official KiCad library.",
+  not_in_official_kicad_library: "Not in the official KiCad library or ezPLM's library.",
   not_previewable: "This file could not be drawn.",
   no_model: "The footprint references no 3D model.",
 };
@@ -46,10 +46,12 @@ export default function CadPreview({ partId, mpn }: { partId: string; mpn: strin
 
   const modelPath = data?.model?.path || "";
   const loadModel = useCallback(async () => {
-    const r = await fetch("/api/models/kicad?" + new URLSearchParams({ path: modelPath, revision: data?.model?.revision || "master" }));
+    const r = await fetch(
+      data?.model?.url || "/api/models/kicad?" + new URLSearchParams({ path: modelPath, revision: data?.model?.revision || "master" }),
+    );
     if (!r.ok) throw Error("model");
     return r.arrayBuffer();
-  }, [modelPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [modelPath, data?.model?.url]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <p className="notice">CAD preview unavailable: {error}</p>;
   if (!data) return <p className="muted">Loading symbol and footprint…</p>;
@@ -106,7 +108,12 @@ export default function CadPreview({ partId, mpn }: { partId: string; mpn: strin
         </div>
         <PinStatus symbol={symbol} footprint={footprint} />
         <p className="ecad-source">
-          Official KiCad {data.revision} libraries · scroll to zoom, drag to pan · {mpn}
+          {[data.symbol?.library, data.footprint?.library].some((l) => l?.startsWith("ezPLM:"))
+            ? [data.symbol?.library, data.footprint?.library].every((l) => !l || l.startsWith("ezPLM:"))
+              ? "ezPLM library"
+              : `Official KiCad ${data.revision} + ezPLM libraries`
+            : `Official KiCad ${data.revision} libraries`}{" "}
+          · scroll to zoom, drag to pan · {mpn}
         </p>
       </div>
     </PinLinkProvider>

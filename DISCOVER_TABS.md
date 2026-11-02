@@ -171,7 +171,7 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
   - 星数和格式在本站过滤：最多看每个条件的前 100 个设计。
   - 规划器读前 12 个结果的详情，判断有没有封装。
 - **部署后**这些自动换成精确结果，不用改本站代码。
-- 应用方法：在 ezplm_partdata 仓库运行 `git am 0001-partner-filters.patch`。
+- 应用方法：在 ezplm_partdata 仓库依次运行 `git am 0001-partner-filters.patch`、`git am 0002-ezplm-cad-files.patch`（第二个见 §9）。
 - partdata 现有测试里有一条（`openapi.json` 列出路由）在未打补丁的 main 上本来就失败，与本补丁无关。
 
 ### 知识图谱里的"可替代"关系
@@ -192,6 +192,28 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - **设计数量**：partdata 只发布"解析成功、至少 5 个可识别器件、有明确许可"的设计。器件族的使用次数（知识图谱）因此会大于可打开的设计数，页面上已说明。
 - **数据手册**：partdata 不转发 ezPLM 内的 PDF，只告诉"有没有"；没有公开链接时页面显示 "Datasheet on file (not public)"。
 - **族键拆分**：partdata 已知问题，`AMS1117-3.3` 的族键是 `AMS111733`，与 `AMS1117` 分成两个族（见 partdata `KNOWLEDGE_GRAPH.md`）。
-- **非官方库的符号/封装**（例如来自厂商库或某个开源工程）不在 KiCad 官方库里时，预览会显示 "Not in the official KiCad library"。如需覆盖，partdata 可在详情里增加库文件下载链接（目前公开接口没有）。
+- **非官方库的符号/封装**：KiCad 官方库没有、ezPLM 自建库有的，打上 0002 补丁后从 ezPLM 库加载（§9）；两边都没有时显示 "Not in the official KiCad library or ezPLM's library"。
 - **GitHub 配额**：生产务必配置 `MAKER_GITHUB_TOKEN`。
-- 进程内缓存与访客限流是每个实例各自一份（与原型相同）；访客总量由 partdata 的 `X-End-User` 限额兜底。流量大时可换成 Upstash Redis（项目已有依赖）。
+- 进程内缓存与访客限流是每个实例各自一份（与原型相同）；访客总量由 partdata 的 `X-End-User` 限额兜底（每次访客操作只记 1 次，见 §9）。流量大时可换成 Upstash Redis（项目已有依赖）。
+
+## 9. 第四轮调整（按测试反馈）
+
+- **访客额度只按"查询"计**：partdata 对每个带 `X-End-User` 的调用都记访客次数，原来打开一次图谱就要扇出 20～40 个调用，
+  每张设计卡片取图也各算一次，所以一天 300 次很快用完。现在访客在本站的一次操作（一次搜索、打开一次图谱、一次 BOM 匹配……）
+  只把第一个上游调用记到访客头上，其余只计入合作方密钥的每天总数（默认 20000，可在 partdata 后台调高）；
+  卡片图片、项目简介这类页面自己加载的请求完全不记访客。缓存命中（10 分钟）本来就不调用 partdata。
+- **ezPLM 自建库**（需要 `docs/partdata/0002-ezplm-cad-files.patch`）：partdata 新增签名接口
+  `GET /api/pub/v1/parts/{id}/cad/{symbol|footprint|model}`，物料详情带 `ezplm_library` 表示 ezPLM 库里有哪些文件。
+  本站在 KiCad 官方库没有时改用 ezPLM 的符号 / 封装 / 3D：元器件页预览与下载、PCB planner 的器件列表和封装都适用，标注 "ezPLM:名称"。
+  文件经本站转发（`/api/maker/cad/{id}/{kind}`），浏览器拿不到 partdata 的地址和密钥。
+- **常用器件图谱**：Open hardware 选了电路模块后，子模块选择框右侧有 "Common parts"，弹出只针对该模块（含子模块）的图谱，
+  顶部列出最常用的器件族及其在该模块设计里的占比。数据来自 partdata `rankings/functions/{id}/families`。
+- **没有标题图的项目**：列表没有图时，读该仓库（或设计所在子目录）的 README，取第一张不是徽章的图片；再没有用 PCB 预览图。
+- **项目简介**：项目详情页显示 README 开头的一两段（纯文本，最多约 700 字符），并链接完整 README。README 每个仓库每天只取一次。
+- **链接可点**：卡片和详情里的描述中的网址可以直接点开（新标签页）。
+- **BOM 匹配状态**：用图标代替文字——✓ 已匹配 MPN，! 有候选待确认，? 未匹配；鼠标悬停有说明。
+- **刷新供应商价格**：现在会显示进度和结果，例如"找到 0/2 行的实时价格；DigiKey、Mouser 未在本站连接"。
+  实时价格需要在 Vercel 配置 `DIGIKEY_CLIENT_ID` / `DIGIKEY_CLIENT_SECRET` / `DIGIKEY_ENV=production` 或 `MOUSER_API_KEY`；
+  它们的每日额度用完时也会明确提示。和 partdata 的访客额度无关。
+- **PCB 点器件不再移动**：右侧面板宽度固定，选中器件时画布尺寸不变。
+- **图谱线型图例**：修复图例的小图标被画布样式撑大的问题。

@@ -96,8 +96,13 @@ export async function search(
             })),
           );
           statuses.push({ source: "DigiKey direct", status: "ready" });
-        } catch {
-          statuses.push({ source: "DigiKey direct", status: "error" });
+        } catch (e) {
+          const m = e instanceof Error ? e.message : "";
+          statuses.push({
+            source: "DigiKey direct",
+            status: "error",
+            message: m === "RATE_LIMITED" ? "DigiKey daily API quota used up" : /OAuth/.test(m) ? "DigiKey credentials rejected" : "DigiKey request failed",
+          });
         }
       })(),
       (async () => {
@@ -122,9 +127,11 @@ export async function search(
               signal: AbortSignal.timeout(15000),
             },
           );
+          if (r.status === 429) throw Error("RATE_LIMITED");
           if (!r.ok) throw Error();
           const data = await r.json();
-          if (data.Errors?.length) throw Error();
+          if (data.Errors?.length)
+            throw Error(JSON.stringify(data.Errors).match(/limit|exceed/i) ? "RATE_LIMITED" : "");
           parts.push(
             ...(data.SearchResults?.Parts || []).map((p: any) => {
               const money = (v: string) => {
@@ -173,8 +180,12 @@ export async function search(
             }),
           );
           statuses.push({ source: "Mouser direct", status: "ready" });
-        } catch {
-          statuses.push({ source: "Mouser direct", status: "error" });
+        } catch (e) {
+          statuses.push({
+            source: "Mouser direct",
+            status: "error",
+            message: e instanceof Error && e.message === "RATE_LIMITED" ? "Mouser daily API quota used up" : "Mouser request failed",
+          });
         }
       })(),
     ]);
