@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 // KiCad hierarchical-label outline: one text height long, half-height each side.
 // Coordinates point right at 0 degrees; attachment stays at (0, 0).
 export function hierarchicalPort(shape: string | undefined, size: number, rotation: number) {
@@ -23,4 +24,3 @@ export function globalPort(shape:string|undefined,size:number,rotation:number,te
  const r=-rotation*Math.PI/180;
  return {points:outline.map(([x,y])=>({x:x*Math.cos(r)-y*Math.sin(r),y:x*Math.sin(r)+y*Math.cos(r)})),textOffset:w/2};
 }
-

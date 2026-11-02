@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md.
 import type { SourceRef } from "../eda/types";
 export type PinRole =
   | "POWER"
@@ -118,4 +119,3 @@ export type PdfEvidenceDocument = {
   }[];
   connectivityStatus: "NOT_RECONSTRUCTED";
 };
-

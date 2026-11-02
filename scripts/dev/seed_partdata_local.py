@@ -27,7 +27,7 @@ if not str(os.environ.get("EZPLM_STAGING_DB", "")).startswith("sqlite"):
 from ezplm_pilot import kg, pub_api  # noqa: E402
 from ezplm_pilot.ihs import norm_mpn  # noqa: E402
 from ezplm_pilot.staging import (  # noqa: E402
-    OshwBom, OshwItem, OshwMatch, PartnerKey, RepoStat, StagedPart,
+    OshwBom, OshwBomModule, OshwItem, OshwMatch, PartnerKey, RepoStat, StagedPart,
 )
 from ezplm_pilot.web import _new_session  # noqa: E402
 
@@ -91,6 +91,7 @@ def main():
     db = _new_session()
     # Clean previous fixtures.
     db.query(OshwMatch).filter(OshwMatch.bom_id.like("fx-%")).delete(synchronize_session=False)
+    db.query(OshwBomModule).filter(OshwBomModule.bom_id.like("fx-%")).delete(synchronize_session=False)
     db.query(OshwItem).filter(OshwItem.bom_id.like("fx-%")).delete(synchronize_session=False)
     db.query(OshwBom).filter(OshwBom.bom_id.like("fx-%")).delete(synchronize_session=False)
     db.query(RepoStat).filter(RepoStat.repo.in_([ZF] + [f"fixture/board-{i}" for i in range(60)])).delete(synchronize_session=False)
@@ -136,6 +137,19 @@ def main():
                    commit="0" * 40, stars=stars)
     db.commit()
 
+    # Circuit modules per design (normally recognised by partdata's module rules from the BOM).
+    MOD = {"STM32F103": "mcu.mcu.arm", "ATMEGA328P": "mcu.mcu.mcu8", "ESP32S3": "mcu.wireless", "AMS1117": "pwr.linear.ldo",
+           "CH340G": "wire.usb.uart", "NE555P": "clk.timer", "LM358": "ana.opamp", "USBLC6": "prot.esd",
+           "CY7C65213": "wire.usb.uart", "MAX202": "wire.rs232", "TPS2061": "pwr.switch", "Z84C": "logic.retro"}
+    for b in db.query(OshwBom).filter(OshwBom.bom_id.like("fx-%")).all():
+        mods = set()
+        for it in db.query(OshwItem).filter(OshwItem.bom_id == b.bom_id):
+            for k, m in MOD.items():
+                if (it.key_norm or "").startswith(k.replace("-", "")):
+                    mods.add(m)
+        for m in mods:
+            db.add(OshwBomModule(bom_id=b.bom_id, project_id=b.project_id, module_id=m, n_items=1))
+    db.commit()
     print(kg.build(db, log=lambda *a: None, min_pair_family_n=2))
     db.query(PartnerKey).filter(PartnerKey.name == "tindie-local").delete()
     db.commit()

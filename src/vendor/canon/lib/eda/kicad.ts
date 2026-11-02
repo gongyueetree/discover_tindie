@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import {legacyFieldLayout,legacyLabelRotation} from "./legacy-text";
 import { activeKicadDocuments } from "./active-documents";
 import { arcPoints } from "./view-geometry";
@@ -11,6 +12,7 @@ import {
   parseSExpression,
   rootExpression,
   type SList,
+  valueAt,
 } from "./sexpr";
 import type {
   InputAsset,
@@ -1066,7 +1068,7 @@ function circleFromThreePoints(
   return { center, angle: midSweep <= positiveSweep ? positiveSweep : positiveSweep - 360 };
 }
 
-function calculatePhysicalDimensions(
+export function calculatePhysicalDimensions(
   outline: PcbIr["boardOutline"],
   thickness?: string,
 ): PcbIr["physicalDimensions"] | undefined {
@@ -1268,12 +1270,16 @@ function parsePcb(
       reference: properties.Reference ?? `?${index + 1}`,
       value: properties.Value ?? "",
       libraryIdentifier,
+      ...(Object.keys(properties).length > 0 ? { fields: properties } : {}),
       models: directChildren(footprintNode,"model").map(model=>{
         const xyz=(key:string, fallback:number)=>{const parent=firstChild(model,key);const n=parent && (firstChild(parent,"xyz")??parent);return [1,2,3].map(i=>Number(atom(n?.items[i])??fallback));};
         const offset=xyz(firstChild(model,"offset")?"offset":"at",0).map(v=>firstChild(model,"offset")?v:v*25.4);
         return {path:atom(model.items[1])??"",offset,scale:xyz("scale",1),rotation:xyz("rotate",0),hidden:!!firstChild(model,"hide")||model.items.some(n=>atom(n)==="hide")};
       }),
-      graphics: ([['fp_line','line'],['fp_arc','arc'],['fp_circle','circle'],['fp_rect','rectangle']] as const).flatMap(([nodeHead,kind]) => directChildren(footprintNode,nodeHead).map((node,i)=>({id:stableId("fp-graphic",id,nodeHead,i),layer:childValue(node,"layer")??"",kind,geometry:outlineGeometry(node,kind)}))),
+      graphics: ([['fp_line','line'],['fp_arc','arc'],['fp_circle','circle'],['fp_rect','rectangle']] as const).flatMap(([nodeHead,kind]) => directChildren(footprintNode,nodeHead).map((node,i)=>({id:stableId("fp-graphic",id,nodeHead,i),layer:childValue(node,"layer")??"",kind,geometry:outlineGeometry(node,kind),...withWidth(node)}))),
+      // Its silkscreen texts and polygons (local addition, ../NOTICE.md): the 3D view prints them on the board.
+      texts: footprintSilkTexts(footprintNode, id, properties),
+      polygons: directChildren(footprintNode, "fp_poly").flatMap((node, i) => silkPolygon(node, stableId("fp-poly", id, i))),
       position: at ? point(at[0], at[1]) : undefined,
       rotation: at?.[2] ?? "0",
       side: layer.startsWith("F.") ? "front" : layer.startsWith("B.") ? "back" : "unknown",
@@ -1336,6 +1342,7 @@ function parsePcb(
         ? layersNode.items.slice(1).map(atom).filter((item): item is string => Boolean(item))
         : [childValue(zoneNode, "layer")].filter((item): item is string => Boolean(item)),
       sourceRef: ref,
+      ...zoneShape(zoneNode),
     };
   });
 
@@ -1460,6 +1467,7 @@ function parsePcb(
     tracks,
     vias,
     zones,
+    silkscreen: boardSilkscreen(root, pcbId),
     sourceRefs: [fileRef],
   };
   const knownHeads = new Set(["version", "generator", "generator_version", "embedded_fonts", "embedded_files", "general", "paper", "title_block", "layers", "setup", "net", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc", "gr_circle", "gr_rect", "gr_poly", "gr_text", "gr_text_box", "dimension", "target", "group", "image", "net_class", "property"]);
@@ -1693,6 +1701,236 @@ export function parseKicad(inputs: InputAsset[], inventory: SourceAsset[]): Kica
   if (!output.schematics.length && !output.pcbs.length && !output.libraries.length) {
     output.diagnostics.push(diagnostic("PROJECT_ENTRY_NOT_FOUND", "未找到可解析的 .kicad_sch 或 .kicad_pcb 入口。", "error", "structure"));
   }
+  output.nets = joinSheetNets(output.schematics, output.nets, output.diagnostics);
   return output;
 }
 
+/**
+ * One design's nets across its sheets (each sheet's nets are built on their
+ * own, buildConnectivity): a sheet box's pin in the parent and the sub-sheet's
+ * hierarchical label of that name are one net, as are global labels and power
+ * symbols of one name on any sheet. A sheet placed more than once is several
+ * instances of the same file — its nets are not joined to any one parent
+ * (that would short the instances together), and a diagnostic says so.
+ *
+ * The joined net is named as KiCad shows it: a power or global name first,
+ * then a label on the sheet nearest the root, then the sheet pin's name.
+ */
+export function joinSheetNets(schematics: SchematicIr[], nets: NetIr[], diagnostics: ParseDiagnostic[]): NetIr[] {
+  const logical = nets.filter((net) => net.domain === "schematic_logical");
+  if (schematics.length < 2 || logical.length < 2) return nets;
+  const pathOf = (schematic: SchematicIr) => schematic.sourceRefs[0]?.path ?? "";
+  const byPath = new Map(schematics.map((schematic) => [normalizeRelativePath(pathOf(schematic)).toLowerCase(), schematic]));
+  // Which sheet each net is on: by its wires, labels and pins.
+  const sheetOf = new Map<string, SchematicIr>();
+  for (const schematic of schematics) {
+    for (const wire of schematic.wires) sheetOf.set(wire.id, schematic);
+    for (const label of schematic.labels) sheetOf.set(label.id, schematic);
+    for (const pin of schematic.pins) sheetOf.set(pin.id, schematic);
+  }
+  const netSheet = new Map<string, SchematicIr>();
+  for (const net of logical) {
+    const anchor = [...net.segmentIds, ...net.endpoints.map((endpoint) => endpoint.targetId ?? "")].find((id) => sheetOf.has(id));
+    if (anchor) netSheet.set(net.id, sheetOf.get(anchor)!);
+  }
+
+  // The sheets' hierarchy: each placed file, how often, and its depth from a root.
+  const placements = new Map<SchematicIr, { parent: SchematicIr; box: NonNullable<SchematicIr["sheetBoxes"]>[number] }[]>();
+  for (const parent of schematics) {
+    for (const box of parent.sheetBoxes ?? []) {
+      const child = byPath.get(normalizeRelativePath(`${directoryOf(pathOf(parent))}/${box.file}`).toLowerCase());
+      if (child && child !== parent) placements.set(child, [...(placements.get(child) ?? []), { parent, box }]);
+    }
+  }
+  const depth = (schematic: SchematicIr, seen = new Set<SchematicIr>()): number => {
+    const placed = placements.get(schematic);
+    if (!placed?.length || seen.has(schematic)) return 0;
+    seen.add(schematic);
+    return 1 + Math.min(...placed.map((entry) => depth(entry.parent, seen)));
+  };
+
+  const uf = new UnionFind();
+  for (const net of logical) uf.add(net.id);
+  // Global labels and power symbols: one name, one net, on every sheet.
+  const byGlobalName = new Map<string, string>();
+  for (const net of logical) {
+    for (const endpoint of net.endpoints) {
+      if (endpoint.type !== "label" || !["global", "power"].includes(endpoint.identifier.kind ?? "") || !endpoint.identifier.name) continue;
+      const key = endpoint.identifier.name;
+      const first = byGlobalName.get(key);
+      if (first) uf.union(first, net.id);
+      else byGlobalName.set(key, net.id);
+    }
+  }
+  // Sheet pins: the parent's net at the pin, and the child's hierarchical label of the pin's name.
+  const atPoint = (schematic: SchematicIr, x: number, y: number) =>
+    logical.find((net) => {
+      if (netSheet.get(net.id) !== schematic) return false;
+      if (net.endpoints.some((endpoint) => endpoint.position && Math.abs(Number(endpoint.position.x) - x) < 1e-6 && Math.abs(Number(endpoint.position.y) - y) < 1e-6)) return true;
+      return net.segmentIds.some((id) => {
+        const wire = schematic.wires.find((candidate) => candidate.id === id);
+        return wire?.points.some((start, index) => {
+          const end = wire.points[index + 1];
+          return end ? liesOnSegment(x, y, Number(start.x), Number(start.y), Number(end.x), Number(end.y)) : false;
+        });
+      });
+    });
+  for (const [child, placed] of placements) {
+    if (placed.length > 1) {
+      diagnostics.push(diagnostic("SCHEMATIC_SHEET_REUSED", `${pathOf(child)} 被放置了 ${placed.length} 次：各实例的网络未与上层连接（不把多个实例短接在一起）。`, "information", "connectivity", child.sourceRefs[0], "preserved"));
+      continue;
+    }
+    const { parent, box } = placed[0]!;
+    for (const pin of box.pins) {
+      const outer = atPoint(parent, Number(pin.position.x), Number(pin.position.y));
+      const inner = logical.find((net) => netSheet.get(net.id) === child && net.endpoints.some((endpoint) => endpoint.type === "label" && endpoint.identifier.kind === "hierarchical" && endpoint.identifier.name === pin.name));
+      if (outer && inner) uf.union(outer.id, inner.id);
+    }
+  }
+
+  const groups = new Map<string, NetIr[]>();
+  for (const net of logical) groups.set(uf.find(net.id), [...(groups.get(uf.find(net.id)) ?? []), net]);
+  if ([...groups.values()].every((group) => group.length === 1)) return nets;
+  const tool = (name: string) => /^N\$/.test(name);
+  const joined: NetIr[] = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      joined.push(group[0]!);
+      continue;
+    }
+    const labels = group.flatMap((net) => {
+      const sheet = netSheet.get(net.id);
+      const level = sheet ? depth(sheet) : Number.MAX_SAFE_INTEGER;
+      return net.endpoints.filter((endpoint) => endpoint.type === "label").map((endpoint) => ({ name: endpoint.identifier.name ?? "", kind: endpoint.identifier.kind ?? "", depth: level }));
+    });
+    const ranked = labels
+      .filter((label) => label.name)
+      .sort((a, b) => Number(["power", "global"].includes(b.kind)) - Number(["power", "global"].includes(a.kind)) || a.depth - b.depth || Number(a.kind === "hierarchical") - Number(b.kind === "hierarchical"));
+    const names = [...new Set([...ranked.map((label) => label.name), ...group.flatMap((net) => net.displayNames).filter((name) => !tool(name))])];
+    const canonicalName = ranked[0]?.name ?? group.find((net) => !tool(net.canonicalName))?.canonicalName ?? group[0]!.canonicalName;
+    const resolved = group.some((net) => net.resolution.method === "connectivity_resolved");
+    joined.push({
+      id: stableId("net", ...group.map((net) => net.id).sort()),
+      domain: "schematic_logical",
+      canonicalName,
+      displayNames: names.length ? names : [canonicalName],
+      endpoints: group.flatMap((net) => net.endpoints),
+      segmentIds: group.flatMap((net) => net.segmentIds),
+      resolution: resolved ? { method: "connectivity_resolved", confidence: Math.min(...group.filter((net) => net.resolution.method === "connectivity_resolved").map((net) => net.resolution.confidence)) } : group[0]!.resolution,
+      sourceRefs: group.flatMap((net) => net.sourceRefs),
+    });
+  }
+  return [...nets.filter((net) => net.domain !== "schematic_logical"), ...joined];
+}
+
+/** A `(pts (xy x y) …)` list's points, in mm as written. */
+function zonePoints(node: SList | undefined): [number, number][] {
+  if (!node) return [];
+  return directChildren(node, "xy").flatMap((xy) => {
+    const x = Number(valueAt(xy, 1));
+    const y = Number(valueAt(xy, 2));
+    return Number.isFinite(x) && Number.isFinite(y) ? [[x, y] as [number, number]] : [];
+  });
+}
+
+/**
+ * The zone as KiCad drew it (user report 2026-10-18): its outline, whether it
+ * is a rule area, and the copper it was filled with on each layer — KiCad's
+ * own fill, already fractured into single outlines, so it is drawn as it is.
+ * Local addition (../NOTICE.md).
+ */
+function zoneShape(zoneNode: SList): { shape?: { keepout: boolean; outline: [number, number][]; fills: { layer: string | null; points: [number, number][] }[] } } {
+  const outline = zonePoints(firstChild(firstChild(zoneNode, "polygon") ?? zoneNode, "pts"));
+  const fills = directChildren(zoneNode, "filled_polygon")
+    .map((fill) => ({ layer: childValue(fill, "layer") ?? null, points: zonePoints(firstChild(fill, "pts")) }))
+    .filter((fill) => fill.points.length >= 3);
+  if (outline.length < 3 && fills.length === 0) return {};
+  return { shape: { keepout: Boolean(firstChild(zoneNode, "keepout")), outline, fills } };
+}
+
+/** KiCad's silkscreen layers, by the name its files write or the newer one. Local addition (../NOTICE.md). */
+const SILK_LAYER = /^[FB]\.Silk(?:S|screen)$/;
+
+/** A drawing's stroke width: KiCad 6+ `(stroke (width …))`, KiCad 5 `(width …)`. */
+function withWidth(node: SList): { width?: string } {
+  const width = childValue(firstChild(node, "stroke") ?? node, "width") ?? childValue(node, "width");
+  return width !== undefined && Number.isFinite(Number(width)) ? { width } : {};
+}
+
+/** Whether a text or property is hidden: a bare `hide`, `(hide yes)`, or either inside its effects. */
+function isHidden(node: SList): boolean {
+  const bare = (list: SList, from: number) => list.items.slice(from).some((item) => item.kind === "atom" && !item.quoted && item.value === "hide");
+  const effects = firstChild(node, "effects");
+  return bare(node, 3) || childValue(node, "hide") === "yes" || (!!effects && (bare(effects, 1) || childValue(effects, "hide") === "yes"));
+}
+
+/**
+ * A text on a silkscreen layer as the file writes it — its position (a
+ * footprint's own frame for a footprint's text), its angle on the board, its
+ * size and stroke, how it is anchored and whether it is mirrored. Hidden texts
+ * and texts on other layers are not printed, so not read. Local addition (../NOTICE.md).
+ */
+function silkText(node: SList, id: string, text: string, kind: "reference" | "value" | "field" | "user") {
+  const layer = childValue(node, "layer") ?? "";
+  const at = nodeAt(node);
+  if (!SILK_LAYER.test(layer) || !at || !text.trim() || isHidden(node)) return [];
+  const effects = firstChild(node, "effects");
+  const font = effects ? firstChild(effects, "font") : undefined;
+  const size = font ? firstChild(font, "size") : undefined;
+  const justify = effects ? firstChild(effects, "justify") : undefined;
+  const words = new Set((justify?.items.slice(1) ?? []).map((item) => atom(item)));
+  const thickness = font ? childValue(font, "thickness") : undefined;
+  const height = numericString(atom(size?.items[1]), "1");
+  return [{
+    id,
+    layer,
+    kind,
+    text,
+    position: point(at[0], at[1])!,
+    angle: numericString(at[2]),
+    size: { height, width: numericString(atom(size?.items[2]), height) },
+    ...(thickness !== undefined ? { thickness: numericString(thickness) } : {}),
+    justify: {
+      horizontal: words.has("left") ? "left" : words.has("right") ? "right" : "center",
+      vertical: words.has("top") ? "top" : words.has("bottom") ? "bottom" : "center",
+    },
+    mirrored: words.has("mirror"),
+  }];
+}
+
+/** A footprint's silkscreen texts: its properties (KiCad 6+) and `fp_text` (any version), `${REFERENCE}` and `${VALUE}` (KiCad 5: `%R`, `%V`) filled in. */
+function footprintSilkTexts(footprintNode: SList, footprintId: string, fields: Record<string, string>) {
+  const fill = (text: string) => text.replace(/\$\{REFERENCE\}|%R/g, fields.Reference ?? "").replace(/\$\{VALUE\}|%V/g, fields.Value ?? "");
+  const kindOf = (name: string | undefined) => (name === "Reference" || name === "reference" ? "reference" : name === "Value" || name === "value" ? "value" : name === "user" ? "user" : "field");
+  return [
+    ...directChildren(footprintNode, "property").flatMap((node, i) => silkText(node, stableId("fp-text", footprintId, "property", i), fill(atom(node.items[2]) ?? ""), kindOf(atom(node.items[1])))),
+    ...directChildren(footprintNode, "fp_text").flatMap((node, i) => silkText(node, stableId("fp-text", footprintId, "fp_text", i), fill(atom(node.items[2]) ?? ""), kindOf(atom(node.items[1])))),
+  ];
+}
+
+/** A polygon on a silkscreen layer (`fp_poly`, `gr_poly`): its corners as written, filled unless the file says not. */
+function silkPolygon(node: SList, id: string) {
+  const layer = childValue(node, "layer") ?? "";
+  if (!SILK_LAYER.test(layer)) return [];
+  const points = directChildren(firstChild(node, "pts") ?? node, "xy").flatMap((xy) => {
+    const at = point(valueAt(xy, 1), valueAt(xy, 2));
+    return at && Number.isFinite(Number(at.x)) && Number.isFinite(Number(at.y)) ? [at] : [];
+  });
+  if (points.length < 3) return [];
+  const fillNode = firstChild(node, "fill");
+  const fill = fillNode ? (childValue(fillNode, "type") ?? valueAt(fillNode, 1)) : undefined;
+  return [{ id, layer, points, ...withWidth(node), filled: fill === undefined || fill === "solid" || fill === "yes" }];
+}
+
+/** What the board draws on its silkscreen layers itself — lines, arcs, circles, rectangles, polygons and texts — in board coordinates. */
+function boardSilkscreen(root: SList, pcbId: string) {
+  const heads = [["gr_line", "line"], ["gr_arc", "arc"], ["gr_circle", "circle"], ["gr_rect", "rectangle"]] as const;
+  const graphics = heads.flatMap(([nodeHead, kind]) =>
+    directChildren(root, nodeHead)
+      .filter((node) => SILK_LAYER.test(childValue(node, "layer") ?? ""))
+      .map((node, i) => ({ id: stableId("silk", pcbId, nodeHead, nodeUuid(node, String(i))), layer: childValue(node, "layer")!, kind, geometry: outlineGeometry(node, kind), ...withWidth(node) })),
+  );
+  const polygons = directChildren(root, "gr_poly").flatMap((node, i) => silkPolygon(node, stableId("silk", pcbId, "gr_poly", nodeUuid(node, String(i)))));
+  const texts = directChildren(root, "gr_text").flatMap((node, i) => silkText(node, stableId("silk", pcbId, "gr_text", nodeUuid(node, String(i))), atom(node.items[1]) ?? "", "user"));
+  return { graphics, polygons, texts };
+}

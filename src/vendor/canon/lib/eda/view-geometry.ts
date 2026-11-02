@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 export type XY = { x: number; y: number };
 /** Circular arc through three points, including major arcs. Collinear input is a line. */
 export function arcPoints(a: XY, m: XY, b: XY): XY[] {
@@ -12,4 +13,3 @@ export function arcPoints(a: XY, m: XY, b: XY): XY[] {
   const count=Math.max(8,Math.ceil(Math.abs(sweep)*24));
   return Array.from({length:count+1},(_,i)=>({x:c.x+radius*Math.cos(start+sweep*i/count),y:c.y+radius*Math.sin(start+sweep*i/count)}));
 }
-

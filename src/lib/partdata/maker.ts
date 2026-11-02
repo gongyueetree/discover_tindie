@@ -4,6 +4,8 @@ import { categoryEn, hasCjk, lifecycleEn, manufacturerCanonical, manufacturerEn 
 import { terminology } from "@/lib/maker/english";
 import type { Part, ProviderStatus } from "@/lib/maker/types";
 import type { GraphData, GraphNode } from "@/lib/maker/component-graph";
+import { MODULE_EN } from "./modules";
+import { resolveName } from "./kicad-lib";
 
 const P = "/api/pub/v1";
 const KG = "/api/kg/v1";
@@ -42,7 +44,7 @@ export function toPart(p: any): Part {
     mpn: String(p.mpn || ""),
     manufacturer: manufacturerEn(p.manufacturer),
     description: String(description || ""),
-    package: p.footprint?.value || undefined,
+    package: (typeof p.footprint === "string" ? p.footprint : p.footprint?.value) || undefined,
     datasheet: link(p.datasheet_url),
     productUrl: link(p.product_url),
     source: PARTDATA_SOURCE,
@@ -52,7 +54,7 @@ export function toPart(p: any): Part {
     category: cat || undefined,
     lifecycle: p.lifecycle ? lifecycleEn(p.lifecycle) : null,
     symbolName: p.symbol?.value ?? null,
-    footprintName: p.footprint?.value ?? null,
+    footprintName: (typeof p.footprint === "string" ? p.footprint : p.footprint?.value) ?? null,
     usedInDesigns: typeof p.used_in_designs === "number" ? p.used_in_designs : undefined,
     fieldSources,
     withheld: p.withheld ?? null,
@@ -119,24 +121,65 @@ function toDesign(d: any): DesignCard {
   };
 }
 
-export async function designsBy(
-  filter: { part?: string; mpn?: string; family?: string },
-  offset: number,
-  visitor: string,
-  limit = 20,
-) {
-  const q: Record<string, string | number> = { limit, offset };
+/**
+ * Designs shown on Tindie must be openable and somewhat proven: engineering files the viewer
+ * can parse (KiCad, Eagle, Altium, EasyEDA / JLCEDA) and at least one GitHub star. Vendor
+ * reference designs have neither, so they are not listed.
+ */
+export const DESIGN_RULES = {
+  minStars: 1,
+  // Every format the viewer parses: KiCad, Eagle, Altium Designer, EasyEDA / JLCEDA (standard and Pro).
+  eda: ["kicad", "eagle", "altium", "easyeda", "jlcpro", "jlc", "jlceda", "lceda"],
+};
+const keep = (d: DesignCard) =>
+  d.kind === "open_source" && (d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase());
+
+type DesignFilter = { part?: string; mpn?: string; family?: string; function?: string };
+
+/** Up to 100 designs for one filter (5 cached pages of 20), with Tindie's rules applied. */
+async function designPool(filter: DesignFilter, visitor: string) {
+  const q: Record<string, string | number> = { limit: 20, min_stars: DESIGN_RULES.minStars, eda: DESIGN_RULES.eda.join(",") };
   if (filter.part) q.part = filter.part;
   else if (filter.mpn) q.mpn = filter.mpn;
   else if (filter.family) q.family = filter.family.replace(/^fam:/, "");
-  else throw new PartdataError("Choose a part or family.", 400, "bad_request");
-  const r = await pdGet(`${P}/designs`, q, visitor);
-  return {
-    items: (r.data.items || []).map(toDesign) as DesignCard[],
-    total: Number(r.meta?.pagination?.total) || 0,
-    offset,
-    limit,
-  };
+  else if (filter.function) q.function = filter.function;
+  else throw new PartdataError("Choose a part, family or circuit module.", 400, "bad_request");
+  const out: DesignCard[] = [];
+  let upstreamTotal = 0;
+  for (let offset = 0; offset <= 80; offset += 20) {
+    const r = await pdGet(`${P}/designs`, { ...q, offset }, visitor);
+    const items: DesignCard[] = (r.data.items || []).map(toDesign);
+    upstreamTotal = Number(r.meta?.pagination?.total) || 0;
+    out.push(...items);
+    if (items.length < 20 || offset + 20 >= upstreamTotal) break;
+  }
+  const seen = new Set<string>();
+  return out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id));
+}
+
+export async function designsBy(filter: DesignFilter, offset: number, visitor: string, limit = 20) {
+  let pool: DesignCard[];
+  let approximate = false;
+  if (filter.function) {
+    try {
+      pool = await designPool({ function: filter.function }, visitor);
+    } catch (e) {
+      // A parts database without the module filter answers 400: use the module's most common
+      // component families instead (knowledge graph, classified-design basis) and say so.
+      if (!(e instanceof PartdataError) || e.status !== 400) throw e;
+      approximate = true;
+      const fams = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(filter.function)}/families`, { limit: 4 }, visitor).catch(
+        () => ({ data: { items: [] } }) as any,
+      );
+      const lists = await Promise.all(
+        (fams.data.items || []).slice(0, 4).map((f: any) => designPool({ family: f.family || f.entity_id }, visitor).catch(() => [])),
+      );
+      const seen = new Set<string>();
+      pool = lists.flat().filter((d: DesignCard) => !seen.has(d.id) && seen.add(d.id));
+    }
+  } else pool = await designPool(filter, visitor);
+  pool.sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0) || a.name.localeCompare(b.name));
+  return { items: pool.slice(offset, offset + limit), total: pool.length, offset, limit, approximate };
 }
 
 export async function designDetail(id: string, visitor: string) {
@@ -371,4 +414,43 @@ export async function familyRanking(kind: string, q: string, offset: number, vis
     total: Number(r.meta?.pagination?.total) || 0,
     denominator: Number(r.meta?.denominator_count) || 0,
   };
+}
+
+/* ------------------------------------------------------------------ circuit modules */
+
+export type ModuleNode = { id: string; parent: string | null; name: string; depth: number; minor: boolean; children: ModuleNode[] };
+
+/** partdata's circuit-module category tree, English names (src/lib/partdata/modules.ts). */
+export async function moduleTree(visitor?: string): Promise<ModuleNode[]> {
+  const r = await pdGet(`${KG}/functions`, {}, visitor);
+  const rows: any[] = Array.isArray(r.data) ? r.data : [];
+  const nodes = new Map<string, ModuleNode>();
+  for (const m of rows)
+    nodes.set(m.function_id, {
+      id: m.function_id,
+      parent: m.parent_id || null,
+      name: MODULE_EN[m.function_id] || englishText(m.name) || m.function_id,
+      depth: Number(m.depth) || 0,
+      minor: !!m.minor,
+      children: [],
+    });
+  const roots: ModuleNode[] = [];
+  for (const n of nodes.values()) (n.parent && nodes.get(n.parent) ? nodes.get(n.parent)!.children : roots).push(n);
+  return roots;
+}
+
+/**
+ * Parts for the PCB planner: only those with a footprint the official KiCad library has.
+ * Uses the list's footprint when partdata sends it; otherwise reads the top results' details.
+ */
+export async function plannerParts(q: string, visitor: string) {
+  const key = norm(q);
+  if (key.length < 3) throw new PartdataError("Enter at least 3 characters of a part number.", 400, "query_too_short");
+  const r = await pdGet(`${P}/parts/search`, { q, limit: 20, with_footprint: 1 }, visitor);
+  const rows: any[] = r.data.items || [];
+  const listed = rows.some((x) => "footprint" in x);
+  const parts: Part[] = listed
+    ? rows.map(toPart)
+    : (await Promise.allSettled(rows.slice(0, 12).map((x) => partDetail(x.id, visitor)))).flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+  return parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
 }

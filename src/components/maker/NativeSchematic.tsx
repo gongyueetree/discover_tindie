@@ -10,6 +10,7 @@ import type {
   InputAsset,
 } from "@/vendor/canon/lib/eda/types";
 import { SchematicViewer } from "@/vendor/canon/components/EdaViewers";
+import { drawSchematics } from "@/vendor/eelib/view";
 const colors: Record<Ink, string> = {
   wire: "#008000",
   bus: "#0000cc",
@@ -78,26 +79,16 @@ export default function NativeSchematic({
       });
     return () => a.abort();
   }, [viewId]);
-  const local = useMemo(
-    () =>
-      assets
-        .filter((a) => a.path.endsWith(".kicad_sch"))
-        .flatMap((a) => {
-          try {
-            return [
-              drawSchematic(
-                new TextDecoder().decode(a.bytes),
-                a.path,
-                a.path.split("/").pop()!,
-                new Map(),
-              ).drawing,
-            ];
-          } catch {
-            return [];
-          }
-        }),
-    [assets],
-  );
+  // eelib's view (vendor/eelib/view.ts): every placement of a KiCad sheet in hierarchy order
+  // (KiCad 5 converted first), each Altium SchDoc with its nets, each EAGLE sheet — drawn
+  // from the source files. Other formats have none and fall back to the parsed geometry.
+  const local = useMemo(() => {
+    try {
+      return drawSchematics(bundle, assets);
+    } catch {
+      return [];
+    }
+  }, [bundle, assets]);
   const drawings = remote.length ? remote : local,
     d = drawings[index] || drawings[0];
   useEffect(() => {

@@ -15,7 +15,16 @@ export type GithubProject = {
   version?: number[];
   recommended?: boolean;
 };
-const supported = /\.(kicad_pro|kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc)$/i;
+const supported = /\.(kicad_pro|kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|PrjPcb|epro|eprj|epru|esch|epcb)$/i;
+/** EasyEDA (standard) exports: Schematic_*.json / PCB_*.json, or JSON kept in an easyeda / lceda / jlc folder. */
+const easyedaJson = (path: string) =>
+  /\.json$/i.test(path) &&
+  !/(^|\/)(package(-lock)?|tsconfig|composer|manifest|settings|launch|tasks)\.json$/i.test(path) &&
+  (/(^|\/)(schematic|sch|pcb|sheet)[_ -][^/]*\.json$/i.test(path) || /(^|\/)(easyeda|lceda|jlceda|jlc)[^/]*\//i.test(path));
+const designFile = (path: string) => supported.test(path) || easyedaJson(path);
+/** Folder-based formats: a design's sheets and board sit in one folder under different names. */
+const folderFormat = (path: string) =>
+  /\.(PrjPcb|SchDoc|PcbDoc)$/i.test(path) ? "Altium" : /\.(eprj|epru|esch|epcb)$/i.test(path) ? "JLCEDA Pro" : easyedaJson(path) ? "EasyEDA" : "";
 export function ignoredPath(path: string) {
   return (
     /(^|\/)(\.git|node_modules|__MACOSX|backups?|archive[sd]?|old|obsolete|deprecated|history|gerbers?|fabrication|outputs?|firmware|software)(\/|$)/i.test(
@@ -35,7 +44,7 @@ export function discoverProjects(
     (f) =>
       f.type === "blob" &&
       f.mode !== "120000" &&
-      supported.test(f.path) &&
+      designFile(f.path) &&
       !ignoredPath(f.path) &&
       (!prefix ||
         f.path === prefix ||
@@ -51,7 +60,19 @@ export function discoverProjects(
     byDir.set(dir, list);
   }
   const result: GithubProject[] = [];
-  for (const [dir, list] of byDir) {
+  for (const [dir, all] of byDir) {
+    // A JLCEDA Pro .epro is a complete project archive on its own.
+    for (const f of all.filter((v) => /\.epro$/i.test(v.path)))
+      result.push({ id: f.path, name: stem(f.path).split("/").pop()!, directory: dir, format: "JLCEDA Pro", roots: [f.path], fileCount: 1, version: [] });
+    const folder = all.filter((v) => !/\.epro$/i.test(v.path) && folderFormat(v.path));
+    if (folder.length) {
+      const format = folderFormat(folder.find((v) => /\.(PrjPcb|PcbDoc|epcb)$/i.test(v.path))?.path || folder[0].path);
+      const named = folder.find((v) => /\.(PrjPcb|eprj)$/i.test(v.path)) || folder.find((v) => /\.(PcbDoc|epcb)$/i.test(v.path)) || folder[0];
+      const name = /\.json$/i.test(named.path) ? (dir.split("/").pop() || stem(named.path).split("/").pop()!) : stem(named.path).split("/").pop()!;
+      result.push({ id: dir + "/#" + format, name, directory: dir, format, roots: folder.map((v) => v.path), fileCount: folder.length, version: [] });
+    }
+    const list = all.filter((v) => !folderFormat(v.path) && !/\.epro$/i.test(v.path));
+    if (!list.length) continue;
     const board = list.filter((f) => /\.(kicad_pcb|brd|PcbDoc)$/i.test(f.path));
     const projects = list.filter((f) => /\.kicad_pro$/i.test(f.path));
     const anchors = board.length
@@ -84,9 +105,9 @@ export function discoverProjects(
         directory: dir,
         format: /\.kicad_/i.test(f.path)
           ? "KiCad"
-          : /\.(brd|sch)$/i.test(f.path)
-            ? "Eagle / legacy schematic"
-            : "Altium",
+          : /\.brd$/i.test(f.path)
+            ? "Eagle"
+            : "Eagle / KiCad 5",
         roots,
         fileCount: roots.length,
         version,
@@ -152,5 +173,17 @@ export function referencedFiles(path: string, text: string) {
     const resolved = resolveRepoPath(dir, raw.replace(/^\$\{KIPRJMOD\}\//, ""));
     if (resolved) result.push(resolved);
   }
+  // Altium .PrjPcb: DocumentPath=Sheets\Power.SchDoc
+  if (/\.PrjPcb$/i.test(path))
+    for (const m of text.matchAll(/^DocumentPath\d*=(.+?)\s*$/gim)) {
+      const resolved = resolveRepoPath(dir, m[1].replace(/\\/g, "/"));
+      if (resolved) result.push(resolved);
+    }
+  // KiCad 5 hierarchical sheets: `F1 "sub.sch" 60` inside a $Sheet block.
+  if (/\.sch$/i.test(path) && text.startsWith("EESchema Schematic"))
+    for (const m of text.matchAll(/^F1\s+"([^"]+\.sch)"/gm)) {
+      const resolved = resolveRepoPath(dir, m[1]);
+      if (resolved) result.push(resolved);
+    }
   return result;
 }

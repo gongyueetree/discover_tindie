@@ -1,7 +1,8 @@
-import { parseEagle } from "./eagle";
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import { parseAltium } from "./altium";
 import { parseAllegro } from "./allegro";
 import { inventoryAssets } from "./detect";
+import { parseEagle } from "./eagle";
 import { parseEasyEda } from "./easyeda";
 import { isJlcProProject, parseJlcPro } from "./jlcpro";
 import { parseKicad, type KicadParseOutput } from "./kicad";
@@ -179,11 +180,11 @@ function calculateFidelity(
   const dimensions: CanonicalIrBundle["fidelity"]["dimensions"] = {
     sourceFiles: { status: "complete", recognized: parsed.recognized, normalized: parsed.normalized, opaque: parsed.opaque, note: "所有摄取文件均保留 Hash 与清单。" },
     schematicConnectivity: {
-      status: hasUnresolvedSchematicNet ? "partial" : format === "kicad" && parsed.schematics.length ? "substantially_complete" : format === "altium" && !parsed.schematics.length ? "structure_only" : "partial",
+      status: hasUnresolvedSchematicNet ? "partial" : (format === "kicad" || format === "eagle") && parsed.schematics.length ? "substantially_complete" : format === "altium" && !parsed.schematics.length ? "structure_only" : "partial",
       recognized: parsed.schematics.reduce((sum, schematic) => sum + schematic.wires.length + schematic.labels.length, 0),
       normalized: parsed.nets.filter((net) => net.domain === "schematic_logical").length,
       opaque: 0,
-      note: format === "kicad" ? "端点、Junction、标签和符号 Pin 采用确定性几何图；内部交叉无 Junction 不连接。" : "未对不稳定或专有记录猜测连通性。",
+      note: format === "kicad" ? "端点、Junction、标签和符号 Pin 采用确定性几何图；内部交叉无 Junction 不连接。" : format === "eagle" ? "EAGLE 网络由 net/pinref 显式给出，未从几何推断。" : "未对不稳定或专有记录猜测连通性。",
     },
     pcbConnectivity: {
       status: parsed.pcbs.length ? ["altium", "allegro"].includes(format) ? "partial" : "substantially_complete" : format === "altium" ? "structure_only" : "unknown",
@@ -237,11 +238,11 @@ function calculateFidelity(
 export async function parseEdaProject(inputs: InputAsset[], intakeDiagnostics: ParseDiagnostic[] = []): Promise<CanonicalIrBundle> {
   const detection = await inventoryAssets(inputs);
   let parsed: KicadParseOutput;
-  if (detection.sourceFormat === "eagle") parsed = parseEagle(inputs, detection.assets);
-  else if (detection.sourceFormat === "kicad") parsed = parseKicad(inputs, detection.assets);
+  if (detection.sourceFormat === "kicad") parsed = parseKicad(inputs, detection.assets);
   else if (detection.sourceFormat === "easyeda") parsed = isJlcProProject(inputs, detection.assets) ? parseJlcPro(inputs, detection.assets) : parseEasyEda(inputs, detection.assets);
   else if (detection.sourceFormat === "altium") parsed = parseAltium(inputs, detection.assets);
   else if (detection.sourceFormat === "allegro") parsed = parseAllegro(inputs, detection.assets);
+  else if (detection.sourceFormat === "eagle") parsed = parseEagle(inputs, detection.assets);
   else {
     parsed = {
       settings: {}, schematics: [], pcbs: [], parts: [], nets: [], constraints: [], libraries: [], sourceMap: [], diagnostics: [diagnostic("FORMAT_UNSUPPORTED", "没有可用于该工程包的解析适配器。", "error", "unsupported")], opaqueNodes: [], recognized: 0, normalized: 0, opaque: 0,
@@ -251,6 +252,14 @@ export async function parseEdaProject(inputs: InputAsset[], intakeDiagnostics: P
   const pdfOnly = pdfInputs.length > 0 && detection.sourceFormat === "unknown";
   const diagnostics = [...intakeDiagnostics, ...detection.diagnostics, ...parsed.diagnostics].filter(d => !pdfOnly || !["FORMAT_NOT_DETECTED", "FORMAT_UNSUPPORTED"].includes(d.code));
   const pdfEvidence: NonNullable<CanonicalIrBundle["pdfEvidence"]> = [];
+  if (pdfInputs.length) {
+    const { extractPdfEvidence } = await import("../knowledge/pdf");
+    for (const input of pdfInputs) {
+      const asset = detection.assets.find(a => a.relativePath === input.path)!;
+      pdfEvidence.push(await extractPdfEvidence(input, asset));
+    }
+    diagnostics.push(diagnostic("PDF_CONNECTIVITY_NOT_RECONSTRUCTED", "PDF 仅提取文本与页面坐标证据；未恢复符号、管脚和连线。扫描页需要 OCR。", "warning", "unsupported"));
+  }
   const jlcPro = detection.sourceFormat === "easyeda" && isJlcProProject(inputs, detection.assets);
   const projectName = parsed.projectName ?? withoutExtension(detection.assets.find((asset) => asset.entryRole === "project")?.fileName ?? basename(inputs[0]?.path ?? "Untitled project"));
   const crossDocumentLinks = linkDocuments(parsed.parts, parsed.nets, parsed.pcbs);
@@ -304,7 +313,7 @@ export async function parseEdaProject(inputs: InputAsset[], intakeDiagnostics: P
     parser: {
       agent: "eda-canonical-ir-agent",
       agentVersion: "1.6.0",
-      adapterId: detection.sourceFormat === "allegro" ? "allegro-kicad-bridge" : detection.sourceFormat === "kicad" ? "kicad-sexpr" : jlcPro ? "jlceda-pro-records" : detection.sourceFormat === "easyeda" ? "easyeda-standard-json" : detection.sourceFormat === "altium" ? parsed.schematics.length || parsed.pcbs.length ? "altium-cfb-records" : "altium-safe-intake" : "unknown",
+      adapterId: detection.sourceFormat === "allegro" ? "allegro-kicad-bridge" : detection.sourceFormat === "kicad" ? "kicad-sexpr" : jlcPro ? "jlceda-pro-records" : detection.sourceFormat === "easyeda" ? "easyeda-standard-json" : detection.sourceFormat === "eagle" ? "eagle-xml" : detection.sourceFormat === "altium" ? parsed.schematics.length || parsed.pcbs.length ? "altium-cfb-records" : "altium-safe-intake" : "unknown",
       adapterVersion: "1.6.0",
       deterministic: true,
       llmUsedForParsing: false,
@@ -335,4 +344,3 @@ export async function parseEdaProject(inputs: InputAsset[], intakeDiagnostics: P
     },
   };
 }
-

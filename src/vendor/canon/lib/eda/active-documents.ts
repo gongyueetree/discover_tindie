@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { InputAsset, SourceAsset, ParseDiagnostic } from "./types";
 import { decodeUtf8, diagnostic, sourceRef } from "./util";
 
@@ -45,4 +46,3 @@ export function activeKicadDocuments(inputs: InputAsset[], inventory: SourceAsse
   }
   return selected;
 }
-

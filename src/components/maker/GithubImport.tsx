@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import SupportedFormats from "./SupportedFormats";
 import { Github, ArrowRight, FolderOpen } from "lucide-react";
 import type { GithubProject } from "@/lib/maker/github-projects";
 export default function GithubImport({
@@ -76,8 +77,8 @@ export default function GithubImport({
         <Github size={20} /> Open a public GitHub project
       </h3>
       <p>
-        Scan the current branch snapshot, choose one design, and import only its
-        engineering files and referenced dependencies.
+        Paste a repository or folder link. We list the PCB projects in it; pick one and only
+        that project&apos;s design files are fetched — nothing else from the repository.
       </p>
       <form
         className="search-bar"
@@ -103,6 +104,7 @@ export default function GithubImport({
           <ArrowRight size={14} />
         </button>
       </form>
+      <SupportedFormats github />
       {error && (
         <p role="alert" className="notice error">
           {error}

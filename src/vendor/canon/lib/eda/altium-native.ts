@@ -1,6 +1,9 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import * as CFB from "cfb";
-import { altiumBlocks, altiumProperties } from "./altium-records";
+import { altiumBlocks, altiumProperties, altiumRecordList } from "./altium-records";
 import { attachAltiumModels } from "./altium-models";
+import { copperNames, readAltiumPours } from "./altium-pours";
+import { altiumDesignators, readAltiumSilkscreen } from "./altium-silk";
 import { buildConnectivity, type KicadParseOutput } from "./kicad";
 import type { IrPoint, PartIr, PcbIr, SchematicIr, SourceAsset } from "./types";
 import { diagnostic, sourceRef, stableId, withoutExtension } from "./util";
@@ -14,29 +17,156 @@ const coord = (p: Props, k: string) => (num(p, k) + num(p, `${k}_FRAC`) / 100000
 const pos = (p: Props, x = "LOCATION.X", y = "LOCATION.Y") => pt(coord(p, x), -coord(p, y));
 const decoder = new TextDecoder("windows-1252");
 const altiumPinTypes = ["input", "bidirectional", "output", "open_collector", "passive", "tri_state", "open_emitter", "power_in"];
+/** Altium writes an overbar as a backslash after each letter (`R\E\S\E\T\`): the name is the letters (local change: ../../NOTICE.md). */
+export const altiumText = (text: string) => text.replace(/\\/g, "");
+/**
+ * A component's parameters by name (designator, comment, …), a value written
+ * `=Name` read from the parameter it names, as Altium shows it (local change:
+ * ../../NOTICE.md).
+ */
+export function altiumFields(parameters: Props[]): Record<string, string> {
+  const raw = Object.fromEntries(parameters.map((p) => [p.NAME.toUpperCase(), p.TEXT ?? ""]));
+  const resolve = (value: string, depth = 0): string => (value.startsWith("=") && depth < 4 && raw[value.slice(1).trim().toUpperCase()] !== undefined ? resolve(raw[value.slice(1).trim().toUpperCase()], depth + 1) : value);
+  return Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, resolve(value)]));
+}
 export { altiumBlocks, altiumProperties } from "./altium-records";
+
+/**
+ * A SchDoc's FileHeader records after the header, each in its place (owner
+ * indices count every record): an empty or binary record stands as `{}` /
+ * `RECORD=binary`, and a stream cut short keeps what came before it (local
+ * change: ../../NOTICE.md — one odd record no longer loses the whole sheet).
+ */
+export function altiumSchematicRecords(data: Uint8Array): { records: Props[]; truncated: boolean; binary: number } {
+  const { records, truncated } = altiumRecordList(data);
+  let binary = 0;
+  const props = records.slice(1).map((record) => {
+    if (record.binary) {
+      binary += 1;
+      return { RECORD: "binary" } as Props;
+    }
+    return record.bytes.length ? altiumProperties(record.bytes) : ({} as Props);
+  });
+  return { records: props, truncated, binary };
+}
+
 function schematic(data: Uint8Array, asset: SourceAsset, out: KicadParseOutput) {
-  const records = altiumBlocks(data).slice(1).map(altiumProperties);
+  if (!data.length) throw new Error("Missing FileHeader stream");
+  const { records, truncated, binary } = altiumSchematicRecords(data);
+  if (!records.length) throw new Error("No AD schematic records");
+  schematicRecords(records, asset, out);
+  const ref = sourceRef(asset.id, asset.relativePath);
+  if (truncated) out.diagnostics.push(diagnostic("ALTIUM_SCHEMATIC_TRUNCATED", `${asset.relativePath} 的记录流在第 ${records.length + 1} 条处截断；已读取之前的 ${records.length} 条。`, "warning", "syntax", ref, "preserved"));
+  if (binary) out.diagnostics.push(diagnostic("ALTIUM_SCHEMATIC_BINARY_RECORDS", `${asset.relativePath} 含 ${binary} 条二进制记录（未解释，按位置保留）。`, "information", "unsupported", ref, "preserved"));
+}
+
+/**
+ * A SchDoc saved as "Schematic ASCII" (local change: ../../NOTICE.md): not a
+ * compound file but one `|KEY=VALUE|…` record per line, the first the header —
+ * the same records the binary FileHeader stream holds, read the same way.
+ */
+export function isAltiumAsciiSchematic(bytes: Uint8Array): boolean {
+  const head = decoder.decode(bytes.subarray(0, 256)).replace(/^\uFEFF/, "").trimStart();
+  return /^\|HEADER=[^|\n]*Schematic Capture Ascii/i.test(head);
+}
+export function parseAltiumAsciiSchematic(bytes: Uint8Array, asset: SourceAsset, out: KicadParseOutput) {
+  if (bytes.length > 64 * 1024 * 1024) throw new Error("AD schematic exceeds 64 MiB limit");
+  const lines: Uint8Array[] = [];
+  for (let start = 0, at = 0; at <= bytes.length; at += 1) {
+    if (at < bytes.length && bytes[at] !== 0x0a) continue;
+    const line = bytes.subarray(start, at > start && bytes[at - 1] === 0x0d ? at - 1 : at);
+    if (line.some((byte) => byte !== 0x0d && byte !== 0x20 && byte !== 0x09)) lines.push(line);
+    start = at + 1;
+    if (lines.length > 100000) throw new Error("Invalid or excessive AD records");
+  }
+  schematicRecords(lines.slice(1).map(altiumProperties), asset, out);
+}
+
+/** A schematic's records, after the header: components (1) and what they own, wires, labels, ports and the rest. */
+function schematicRecords(records: Props[], asset: SourceAsset, out: KicadParseOutput) {
   const id = stableId("sch", asset.id), ref = sourceRef(asset.id, asset.relativePath);
   const sch: SchematicIr = { id, documentId: stableId("document", asset.sha256, asset.relativePath), name: withoutExtension(asset.fileName), rootSheetId: `${id}:sheet`, sheets: [{ id: `${id}:sheet`, name: asset.fileName, instancePath: "/" }], texts: [], graphics: [], symbolInstanceIds: [], pins: [], wires: [], junctions: [], labels: [], noConnects: [], connectivityGraphId: stableId("graph", id), sourceRefs: [ref] };
   const components = new Map<number, PartIr>();
+  // Each record's children, by owner index, once (local change: ../../NOTICE.md) — not a scan of every record per component.
+  const owned = new Map<string, number[]>();
+  records.forEach((r, index) => {
+    if (r.OWNERINDEX === undefined) return;
+    if (!owned.has(r.OWNERINDEX)) owned.set(r.OWNERINDEX, []);
+    owned.get(r.OWNERINDEX)!.push(index);
+  });
+  const childrenOf = (index: number | string) => (owned.get(String(index)) ?? []).map(i => records[i]);
+  // A multi-part component (local change: ../../NOTICE.md): each placed part is its own component record with the
+  // same designator; they are one part with one symbol unit per placed part, as KiCad keeps a multi-unit symbol.
+  const multiPart = new Map<string, PartIr>();
+  const unitOf = new Map<number, string>();
   records.forEach((r, index) => {
     if (r.RECORD !== "1") return;
-    const children = records.filter(p => p.OWNERINDEX === String(index));
-    const fields = Object.fromEntries(children.filter(p => ["34", "41"].includes(p.RECORD) && p.NAME).map(p => [p.NAME.toUpperCase(), p.TEXT ?? ""]));
+    const children = childrenOf(index);
+    const fields = altiumFields(children.filter(p => ["34", "41"].includes(p.RECORD) && p.NAME));
     if(r.LIBREFERENCE)fields.lib_id=r.LIBREFERENCE;
+    const designator = fields.DESIGNATOR || r.DESIGNATOR || "?";
+    const sibling = num(r, "PARTCOUNT") > 2 && designator !== "?" ? multiPart.get(`${designator}\u0000${r.LIBREFERENCE ?? ""}`) : undefined;
+    if (sibling) {
+      const unit = { id: `${sibling.id}:unit${num(r, "CURRENTPARTID") || 1}:${index}`, unit: num(r, "CURRENTPARTID") || 1, position: pos(r), rotation: String(num(r, "ORIENTATION") * 90) };
+      sibling.symbolUnits.push(unit);
+      sibling.sourceRefs.push({ ...sourceRef(asset.id, asset.relativePath), nativeId: String(index) });
+      components.set(index, sibling); unitOf.set(index, unit.id); sch.symbolInstanceIds.push(unit.id);
+      return;
+    }
     const partId = stableId("part", id, String(index));
     const part: PartIr = { id: partId, logicalPartKey: r.UNIQUEID || partId, reference: fields.DESIGNATOR || r.DESIGNATOR || "?", value: fields.COMMENT || r.COMMENT || r.LIBREFERENCE || "", fields, manufacturerRaw: fields.MANUFACTURER, mpnRaw: fields["MANUFACTURER PART NUMBER"] || fields.MPN, variantStatus: "unknown", pinPadMap: [], symbolUnits: [{ id: `${partId}:unit`, unit: num(r, "CURRENTPARTID") || 1, position: pos(r), rotation: "0" }], sourceRefs: [{ ...sourceRef(asset.id, asset.relativePath), nativeId: String(index) }] };
     part.manufacturerRaw ||= fields["MANUFACTURER 1"];
     part.mpnRaw ||= fields["MANUFACTURER PART NUMBER 1"];
-    components.set(index, part); out.parts.push(part); sch.symbolInstanceIds.push(part.symbolUnits[0].id);
+    // Its footprint, as the symbol names it (local change: ../../NOTICE.md): the current PCB model of its
+    // implementation list (44 → 45), so a part reads with one before, or without, a board.
+    const lists = [String(index), ...(owned.get(String(index)) ?? []).filter(i => records[i].RECORD === "44").map(String)];
+    const models = lists.flatMap(childrenOf).filter(p => p.RECORD === "45" && (p.MODELTYPE || "").toUpperCase() === "PCBLIB" && p.MODELNAME);
+    const model = models.find(p => p.ISCURRENT === "T") ?? (models.length === 1 ? models[0] : undefined);
+    if (model) part.footprint = model.MODELNAME;
+    components.set(index, part); unitOf.set(index, part.symbolUnits[0].id); out.parts.push(part); sch.symbolInstanceIds.push(part.symbolUnits[0].id);
+    if (num(r, "PARTCOUNT") > 2 && designator !== "?") multiPart.set(`${designator}\u0000${r.LIBREFERENCE ?? ""}`, part);
+  });
+  // Ports, sheet symbols and their entries (local change: ../../NOTICE.md): a port is a hierarchical label (the
+  // project's net scope may make it global, altium.ts), a sheet symbol a sheet box with its entries as pins.
+  const wireTouches = (x: number, y: number) => records.some(w => w.RECORD === "27" && Array.from({ length: Math.min(num(w, "LOCATIONCOUNT"), 10000) }, (_, i) => [coord(w, `X${i + 1}`), coord(w, `Y${i + 1}`)]).some(([ax, ay], i, all) => {
+    const next = all[i + 1];
+    if (Math.abs(ax - x) < 1e-6 && Math.abs(ay - y) < 1e-6) return true;
+    if (!next) return false;
+    const [bx, by] = next;
+    const cross = (x - ax) * (by - ay) - (y - ay) * (bx - ax);
+    return Math.abs(cross) < 1e-6 && (x - ax) * (x - bx) + (y - ay) * (y - by) <= 1e-9;
+  }));
+  sch.sheetBoxes = [];
+  records.forEach((r, index) => {
+    const sr = { ...sourceRef(asset.id, asset.relativePath), nativeId: String(index) };
+    if (r.RECORD === "18") {
+      const [x, y] = [coord(r, "LOCATION.X"), coord(r, "LOCATION.Y")];
+      const width = coord(r, "WIDTH") || 0;
+      const vertical = num(r, "STYLE") >= 4;
+      const ends: [number, number][] = vertical ? [[x, y], [x, y + width]] : [[x, y], [x + width, y]];
+      const [ex, ey] = ends.find(([a, b]) => wireTouches(a, b)) ?? ends[0];
+      sch.labels.push({ id: stableId("ad", id, String(index)), name: altiumText(r.NAME ?? ""), kind: "hierarchical", shape: ["input", "output", "bidirectional"][num(r, "IOTYPE") - 1] ?? "passive", position: pt(ex, -ey), rotation: vertical ? "90" : "0", size: "1.5", sourceRef: sr });
+    } else if (r.RECORD === "15") {
+      const children = childrenOf(index);
+      const [x, y] = [coord(r, "LOCATION.X"), coord(r, "LOCATION.Y")];
+      const [w, h] = [coord(r, "XSIZE"), coord(r, "YSIZE")];
+      const name = children.find(c => c.RECORD === "32")?.TEXT ?? "";
+      const file = children.find(c => c.RECORD === "33")?.TEXT ?? "";
+      const pins = children.filter(c => c.RECORD === "16").map(entry => {
+        const along = (num(entry, "DISTANCEFROMTOP") + num(entry, "DISTANCEFROMTOP_FRAC1") / 1000000) * 2.54;
+        const side = num(entry, "SIDE");
+        const [px, py] = side === 0 ? [x, y - along] : side === 1 ? [x + w, y - along] : side === 2 ? [x + along, y] : [x + along, y - h];
+        return { name: altiumText(entry.NAME ?? ""), position: pt(px, -py) };
+      });
+      sch.sheetBoxes!.push({ id: stableId("ad", id, String(index)), name: altiumText(name), file: file.replace(/\\/g, "/"), position: pt(x, -y), size: { x: String(Number(w.toFixed(7))), y: String(Number(h.toFixed(7))) }, pins });
+    } else if (r.RECORD === "22") sch.noConnects.push(pos(r));
   });
   const unsupported = new Map<string, number>();
   records.forEach((r, index) => {
     const type = r.RECORD || "binary", owner = components.get(num(r, "OWNERINDEX"));
     const component = records[num(r, "OWNERINDEX")];
     if (owner && num(r, "OWNERPARTID") > 0 && (num(r, "OWNERPARTID") !== (num(component, "CURRENTPARTID") || 1) || num(r, "OWNERPARTDISPLAYMODE") !== num(component, "DISPLAYMODE"))) return;
-    const rid = stableId("ad", id, String(index)), unit = owner?.symbolUnits[0].id || rid;
+    const rid = stableId("ad", id, String(index)), unit = (owner && unitOf.get(num(r, "OWNERINDEX"))) || rid;
     const sr = { ...sourceRef(asset.id, asset.relativePath), nativeId: String(index) }, p = pos(r);
     const graphic = (points: IrPoint[], closed = false) => { sch.graphics!.push({ id: rid, symbolUnitId: unit, points: closed ? [...points, points[0]] : points, closed }); };
     const points = () => Array.from({ length: Math.min(num(r, "LOCATIONCOUNT"), 10000) }, (_, i) => pos(r, `X${i + 1}`, `Y${i + 1}`));
@@ -45,7 +175,7 @@ function schematic(data: Uint8Array, asset: SourceAsset, out: KicadParseOutput) 
       const end = pt(Number(p.x) + length * Math.cos(angle), Number(p.y) - length * Math.sin(angle));
       if (!(num(r, "PINCONGLOMERATE") & 4)) graphic([p, end]);
       const electrical = r.ELECTRICAL === undefined ? undefined : altiumPinTypes[Number(r.ELECTRICAL)] || "unspecified";
-      sch.pins.push({ id: rid, partId: owner.id, symbolUnitId: unit, reference: owner.reference, number: r.DESIGNATOR || "", name: r.NAME || "", electricalType: electrical, position: end, bodyPosition:p, hidden:!!(num(r,"PINCONGLOMERATE")&4), sourceRef: sr });
+      sch.pins.push({ id: rid, partId: owner.id, symbolUnitId: unit, reference: owner.reference, number: r.DESIGNATOR || "", name: altiumText(r.NAME || ""), electricalType: electrical, position: end, bodyPosition:p, hidden:!!(num(r,"PINCONGLOMERATE")&4), sourceRef: sr });
     } else if (["6", "7"].includes(type)) graphic(points(), type === "7");
     else if (type === "13") graphic([p, pos(r, "CORNER.X", "CORNER.Y")]);
     else if (type === "14") { const q = pos(r, "CORNER.X", "CORNER.Y"); graphic([p, pt(Number(q.x), Number(p.y)), q, pt(Number(p.x), Number(q.y))], true); }
@@ -58,17 +188,17 @@ function schematic(data: Uint8Array, asset: SourceAsset, out: KicadParseOutput) 
     else if (type === "29") sch.junctions.push({ id: rid, position: p, sourceRef: sr });
     else if (type === "25" || type === "17") {
       const style=num(r,'STYLE');const ground=type==='17'&&([4,5,6,8,9].includes(style)||(!r.STYLE&&/^(?:[A-Z_]*GND|VSS\d*|EARTH)$/i.test(r.TEXT||'')));
-      sch.labels.push({ id: rid, name: r.TEXT || "", kind: type === "17" ? "power" : "local", shape:type==='17'?(ground?'ground':style===1||style===7?'arrow':style===0?'circle':'bar'):undefined, position: p, rotation: String(num(r, "ORIENTATION") * 90), size: "1.5", sourceRef: sr });
+      sch.labels.push({ id: rid, name: altiumText(r.TEXT || ""), kind: type === "17" ? "power" : "local", shape:type==='17'?(ground?'ground':style===1||style===7?'arrow':style===0?'circle':'bar'):undefined, position: p, rotation: String(num(r, "ORIENTATION") * 90), size: "1.5", sourceRef: sr });
     } else if (["4", "34", "41"].includes(type)) {
       if (r.ISHIDDEN === "T" || (type === "41" && r.NAME?.toUpperCase() !== "COMMENT")) return;
       const text = r.TEXT || (type === "34" ? owner?.reference : type === "41" ? owner?.value : "");
       if (text) sch.texts!.push({ id: rid, symbolUnitId: owner?.symbolUnits[0].id, text, kind: type === "34" ? "reference" : "value", position: p, rotation: String(num(r, "ORIENTATION") * 90), size: "1.5", align: "start" });
-    } else if (!["1", "31", "41", "44", "45", "46", "48"].includes(type)) unsupported.set(type, (unsupported.get(type) || 0) + 1);
+    } else if (!["1", "15", "16", "18", "22", "31", "32", "33", "41", "44", "45", "46", "47", "48"].includes(type)) unsupported.set(type, (unsupported.get(type) || 0) + 1);
   });
   // AD field coordinates often share the body or pin wiring. Place fields
   // beside small two-terminal symbols and above connectors with pins on both
   // sides, where a right-side field would sit directly on the outgoing wires.
-  for (const part of components.values()) {
+  for (const part of new Set(components.values())) {
     const unit = part.symbolUnits[0], pins=sch.pins.filter(p=>p.symbolUnitId===unit.id);
     const graphics = sch.graphics!.filter(g => g.symbolUnitId === unit.id && !pins.some(pin=>
       g.points.length===2 && [pin.bodyPosition,pin.position].every((point,i)=>point?.x===g.points[i]?.x&&point?.y===g.points[i]?.y)));
@@ -94,7 +224,7 @@ function schematic(data: Uint8Array, asset: SourceAsset, out: KicadParseOutput) 
   out.schematics.push(sch);
   out.nets.push(...buildConnectivity(sch, sch.pins.map(p => ({ ...p, pin: p.number, x: p.position.x, y: p.position.y })), out.diagnostics));
   out.recognized += records.length; out.normalized += records.length - [...unsupported.values()].reduce((a, b) => a + b, 0);
-  out.diagnostics.push(diagnostic("ALTIUM_SCHEMATIC_PARTIAL", `AD 原理图已解析 ${components.size} 个器件、${sch.pins.length} 个引脚、${sch.wires.length} 条导线。未完整绘制的记录（类型:数量）：${[...unsupported].map(([k,v]) => `${k}:${v}`).join(", ") || "无"}。隐藏引脚、跨页连接与电源样式需人工复核。`, "warning", "unsupported", ref, "preserved"));
+  out.diagnostics.push(diagnostic("ALTIUM_SCHEMATIC_PARTIAL", `AD 原理图已解析 ${new Set(components.values()).size} 个器件、${sch.pins.length} 个引脚、${sch.wires.length} 条导线。未完整绘制的记录（类型:数量）：${[...unsupported].map(([k,v]) => `${k}:${v}`).join(", ") || "无"}。隐藏引脚、跨页连接与电源样式需人工复核。`, "warning", "unsupported", ref, "preserved"));
 }
 
 export function parseAltiumNative(bytes: Uint8Array, asset: SourceAsset, out: KicadParseOutput) {
@@ -116,7 +246,9 @@ function pcb(stream: (name: string) => Uint8Array, asset: SourceAsset, out: Kica
   const board = props("Board6")[0];
   if (!board) throw new Error("Missing Board6 records");
   const result: PcbIr = { id, documentId: stableId("document", asset.sha256, asset.relativePath), name: withoutExtension(asset.fileName), units: "mm", coordinateSystem: { sourceUnits: "0.0001mil", canonicalUnits: "mm", rotationConvention: "degrees_ccw", precision: "source_token_preserved" }, layers: [], stackup: [], boardOutline: [], footprints: [], pads: [], tracks: [], vias: [], zones: [], sourceRefs: [ref] };
-  const layer = (n: number) => n === 1 ? "F.Cu" : n === 32 ? "B.Cu" : n === 74 ? "*.Cu" : `AD.Layer${n}`;
+  // Copper by its place in the stack (In1.Cu …, local change: ../../NOTICE.md); other layers by number.
+  const copper = copperNames(board);
+  const layer = (n: number) => n === 74 ? "*.Cu" : copper.get(n) ?? `AD.Layer${n}`;
   for (let n = 1; n <= 32; n++) result.layers.push({ id: layer(n), sourceId: String(n), name: layer(n), role: "copper", side: n === 1 ? "front" : n === 32 ? "back" : "inner", copper: true });
   const vertices: IrPoint[] = [];
   for (let n = 0; board[`VX${n}`] !== undefined && n < 10000; n++) {
@@ -127,10 +259,20 @@ function pcb(stream: (name: string) => Uint8Array, asset: SourceAsset, out: Kica
     }
   }
   vertices.forEach((p, i) => result.boardOutline.push({ id: `${id}:edge${i}`, kind: "line", geometry: { start: p, end: vertices[(i + 1) % vertices.length] } }));
-  props("Components6").forEach((p, i) => result.footprints.push({ id: `${id}:fp${i}`, reference: p.SOURCEDESIGNATOR || "?", value: p.SOURCELIBREFERENCE || "", libraryIdentifier: p.PATTERN || "", position: pt(mil(p.X), -mil(p.Y)), rotation: String(num(p, "ROTATION")), side: p.LAYER === "BOTTOM" ? "back" : "front", locked: p.LOCKED === "TRUE", padIds: [], sourceRef: { ...sourceRef(asset.id, asset.relativePath), nativeId: `Components6:${i}` } }));
+  // A board not (yet) updated from a schematic names its parts only in each one's designator text (Texts6); read there when Components6 does not say (local change: ../../NOTICE.md).
+  let designators = new Map<number, string>();
+  try {
+    designators = altiumDesignators(stream);
+  } catch {
+    // No readable designator texts: the parts keep "?".
+  }
+  props("Components6").forEach((p, i) => result.footprints.push({ id: `${id}:fp${i}`, reference: p.SOURCEDESIGNATOR || designators.get(i) || "?", value: p.SOURCELIBREFERENCE || "", libraryIdentifier: p.PATTERN || "", position: pt(mil(p.X), -mil(p.Y)), rotation: String(num(p, "ROTATION")), side: p.LAYER === "BOTTOM" ? "back" : "front", locked: p.LOCKED === "TRUE", padIds: [], sourceRef: { ...sourceRef(asset.id, asset.relativePath), nativeId: `Components6:${i}` } }));
   const nets = props("Nets6").map((p, i) => ({ id: `${id}:net${i}`, domain: "pcb_physical" as const, canonicalName: p.NAME || `Net${i}`, displayNames: [p.NAME || `Net${i}`], endpoints: [] as import("./types").NetEndpoint[], segmentIds: [] as string[], resolution: { method: "explicit" as const, confidence: 1 }, sourceRefs: [ref] }));
+  // A stream whose records this reader cannot follow (another format version) stops that stream only, said so;
+  // the parts, nets and other streams read before and after it stay (local change: ../../NOTICE.md).
   const binary = (name: string, type: number, handler: (blocks: Uint8Array[], i: number) => void) => {
     const bytes = stream(`${name}/Data`), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); let offset = 0, i = 0;
+    try {
     while (offset < bytes.length) {
       if (bytes[offset++] !== type || i >= 100000) throw new Error(`Unsupported ${name} record`);
       const blocks: Uint8Array[] = [];
@@ -141,6 +283,9 @@ function pcb(stream: (name: string) => Uint8Array, asset: SourceAsset, out: Kica
         blocks.push(bytes.subarray(offset, offset + len)); offset += len;
       }
       handler(blocks, i++);
+    }
+    } catch (error) {
+      out.diagnostics.push(diagnostic("ALTIUM_PCB_RECORDS_PARTIAL", `${name} 自第 ${i + 1} 条记录起无法解析：${error instanceof Error ? error.message : String(error)}。已读取的 ${i} 条及封装、网络和其余记录保留。`, "warning", "unsupported", ref, "preserved"));
     }
   };
   const read = (b: Uint8Array) => { const v = new DataView(b.buffer, b.byteOffset, b.byteLength); return { u: (i: number) => v.getUint16(i, true), d: (i: number) => v.getFloat64(i, true), mm: (i: number) => v.getInt32(i, true) * .00000254, p: (i: number) => pt(v.getInt32(i, true) * .00000254, -v.getInt32(i + 4, true) * .00000254) }; };
@@ -153,17 +298,27 @@ function pcb(stream: (name: string) => Uint8Array, asset: SourceAsset, out: Kica
   });
   binary("Tracks6", 4, ([b], i) => { const v = read(b), net = nets[v.u(3)], tid = `${id}:track${i}`; result.tracks.push({ id: tid, kind: "segment", start: v.p(13), end: v.p(21), width: String(v.mm(29)), layer: layer(b[0]), netId: net?.id, sourceNativeNetId: String(v.u(3)), sourceRef: ref }); net?.segmentIds.push(tid); });
   binary("Vias6", 3, ([b], i) => { const v = read(b), net = nets[v.u(3)], vid = `${id}:via${i}`; result.vias.push({ id: vid, position: v.p(13), size: String(v.mm(21)), drill: String(v.mm(25)), layers: ["F.Cu", "B.Cu"], netId: net?.id, sourceRef: ref }); net?.endpoints.push({ id: `${vid}:ep`, type: "via", targetId: vid, identifier: {}, position: v.p(13) }); });
+  try {
+    result.zones = readAltiumPours(stream, board, props("Polygons6"), nets, id, ref);
+  } catch (error) {
+    out.diagnostics.push(diagnostic("ALTIUM_POURS_PARTIAL", `覆铜记录解析失败：${error instanceof Error ? error.message : String(error)}。PCB 其余几何仍保留。`, "warning", "geometry", ref, "preserved"));
+  }
+  // Its silkscreen, for the 3D view (local change: ../../NOTICE.md).
+  try {
+    result.silkscreen = readAltiumSilkscreen(stream, props("Components6"), result.footprints, id);
+  } catch (error) {
+    out.diagnostics.push(diagnostic("ALTIUM_SILKSCREEN_PARTIAL", `丝印记录解析失败：${error instanceof Error ? error.message : String(error)}。PCB 其余几何仍保留。`, "warning", "geometry", ref, "preserved"));
+  }
   const usedLayers = new Set([...result.pads.flatMap(p => p.layers), ...result.tracks.map(t => t.layer)]);
   result.layers = result.layers.filter(l => usedLayers.has(l.name));
   try {
     const models = attachAltiumModels(stream, result);
-    out.diagnostics.push(diagnostic("ALTIUM_3D_MODELS", `已关联 ${models.attached} 个 AD 内嵌模型引用；${models.skipped} 条 Body 未关联（外部模型、非封装 Body 或缺少模型）。实际加载状态见 3D 查看器。`, models.skipped ? "warning" : "information", "geometry", ref, "normalized"));
+    out.diagnostics.push(diagnostic("ALTIUM_3D_MODELS", `已关联 ${models.attached} 个 AD 内嵌模型引用；${models.extruded} 个拉伸、圆柱或球体 Body 按其轮廓与高度绘制；${models.skipped} 条 Body 未关联（外部模型、非封装 Body 或缺少模型）。实际加载状态见 3D 查看器。`, models.skipped ? "warning" : "information", "geometry", ref, "normalized"));
   } catch (error) {
     out.diagnostics.push(diagnostic("ALTIUM_3D_PARTIAL", `3D 模型记录解析失败：${error instanceof Error ? error.message : String(error)}。PCB 几何仍保留。`, "warning", "geometry", ref, "preserved"));
   }
   out.pcbs.push(result); out.nets.push(...nets);
   const normalized = result.pads.length + result.tracks.length + result.footprints.length;
   out.normalized += normalized; out.recognized += normalized;
-  out.diagnostics.push(diagnostic("ALTIUM_PCB_PARTIAL", `AD PCB 已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条直线走线和 ${result.vias.length} 个过孔。圆弧板框采用采样近似；覆铜、圆弧走线、特殊焊盘、叠层、盲埋孔范围和规则尚未完整解析。内嵌 STEP 模型按 Body 记录关联，加载结果请查看 3D 页面。`, "warning", "unsupported", ref, "preserved"));
+  out.diagnostics.push(diagnostic("ALTIUM_PCB_PARTIAL", `AD PCB 已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条直线走线、${result.vias.length} 个过孔和 ${result.zones.length} 块覆铜。圆弧板框采用采样近似；圆弧走线、特殊焊盘、叠层、盲埋孔范围和规则尚未完整解析。内嵌 STEP 模型按 Body 记录关联，加载结果请查看 3D 页面。`, "warning", "unsupported", ref, "preserved"));
 }
-

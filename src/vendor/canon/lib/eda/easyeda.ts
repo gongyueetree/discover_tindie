@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { KicadParseOutput } from "./kicad";
 import type {
   InputAsset,
@@ -10,6 +11,7 @@ import type {
   SourceRef,
 } from "./types";
 import { decodeUtf8, diagnostic, point, sourceRef, stableId, withoutExtension } from "./util";
+import { easyEdaStandardSilk, emptySilkscreen } from "./easyeda-silk";
 
 type JsonObject = Record<string, unknown>;
 type ShapeRecord = { prefix: string; fields: string[]; raw: string };
@@ -398,12 +400,15 @@ function parseStandardPcb(
   const boardOutline: PcbIr["boardOutline"] = [];
   const explicitNetNames = new Set<string>();
   const shapeValues = shapesOf(object);
+  // Its silkscreen, the board's and its footprints' (local addition, ../NOTICE.md): the 3D view prints it.
+  const silkscreen = emptySilkscreen();
 
   for (const [shapeIndex, raw] of shapeValues.entries()) {
     const record = parseShapeRecord(raw);
     shapeCounts.set(record.prefix, (shapeCounts.get(record.prefix) ?? 0) + 1);
     output.recognized += 1;
     const nativeId = record.fields.find((field) => /^gge[0-9a-z]+$/i.test(field)) ?? `${shapeIndex}`;
+    easyEdaStandardSilk(record.fields, stableId("silk", pcbId, nativeId, shapeIndex), silkscreen);
     const ref = sourceRef(document.asset.id, document.asset.relativePath, "explicit", {
       nativeId,
       jsonPath: `${document.jsonPath}.shape[${shapeIndex}]`,
@@ -502,6 +507,7 @@ function parseStandardPcb(
     const padIds: string[] = [];
     for (const [childIndex, child] of children.entries()) {
       const padRecord = parseShapeRecord(child);
+      easyEdaStandardSilk(padRecord.fields, stableId("silk", footprintId, childIndex), silkscreen);
       if (padRecord.prefix !== "PAD") continue;
       const netName = padRecord.fields[7] ?? "";
       if (netName) explicitNetNames.add(netName);
@@ -574,6 +580,7 @@ function parseStandardPcb(
     tracks,
     vias,
     zones,
+    silkscreen,
     sourceRefs: [document.ref],
   });
   if (!boardOutline.length) {
@@ -649,4 +656,3 @@ export function parseEasyEda(inputs: InputAsset[], inventory: SourceAsset[]): Ki
   }
   return output;
 }
-

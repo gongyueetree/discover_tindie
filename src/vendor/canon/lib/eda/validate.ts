@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { CanonicalIrBundle, ParseDiagnostic, SourceRef } from "./types";
 import { diagnostic } from "./util";
 
@@ -152,4 +153,3 @@ export function validateReferentialIntegrity(scope: ReferenceScope): ParseDiagno
   }
   return diagnostics;
 }
-

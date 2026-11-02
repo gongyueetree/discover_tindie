@@ -1,5 +1,7 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { InputAsset, ParseDiagnostic, SourceAsset, SourceFormat } from "./types";
 import { ALLEGRO_MANIFEST, isAllegroBoard } from "./allegro-format";
+import { EAGLE_EXTENSIONS, isEagleBinary, isEagleXml } from "./eagle";
 import { basename, decodeUtf8, diagnostic, extensionOf, sha256, sourceRef, stableId } from "./util";
 
 const KICAD_EXTENSIONS = new Set([".kicad_pro", ".kicad_sch", ".kicad_pcb", ".kicad_sym", ".kicad_mod", ".kicad_dru", ".pro", ".sch"]);
@@ -15,6 +17,8 @@ function extensionFormat(extension: string): SourceFormat {
 
 function contentFormat(asset: InputAsset): SourceFormat {
   if (basename(asset.path) === ALLEGRO_MANIFEST || isAllegroBoard(asset.bytes)) return "allegro";
+  // EAGLE's XML (6+, and Fusion 360's export), and its older binary files, recognised to be refused (local change: ../../NOTICE.md).
+  if (isEagleXml(asset.bytes) || isEagleBinary(asset.path, asset.bytes)) return "eagle";
   const prefixBytes = asset.bytes.subarray(0, Math.min(asset.bytes.length, 4096));
   if (
     prefixBytes.length >= 8 &&
@@ -24,7 +28,6 @@ function contentFormat(asset: InputAsset): SourceFormat {
     return extensionOf(asset.path) === ".dsn" ? "allegro" : ALTIUM_EXTENSIONS.has(extensionOf(asset.path)) ? "altium" : "unknown";
   }
   const text = decodeUtf8(prefixBytes).trimStart();
-  if (/<eagle[\s>]/i.test(text)) return "eagle";
   if (/^(PCBNEW-BOARD|EESchema Schematic File Version)\b/.test(text)) return "kicad";
   if (/^\((kicad_sch|kicad_pcb|kicad_symbol_lib|footprint)\b/.test(text)) return "kicad";
   if (/^\[(Project|Document|Design)\]/i.test(text) || /DocumentPath\d*=/i.test(text)) return "altium";
@@ -39,7 +42,7 @@ function roleFor(extension: string): SourceAsset["entryRole"] {
   if ([".kicad_pro", ".pro", ".prjpcb", ".epro", ".eprj", ".epru"].includes(extension)) return "project";
   if ([".kicad_sch", ".sch", ".schdoc", ".esch"].includes(extension)) return "schematic";
   if ([".kicad_pcb", ".brd", ".pcbdoc", ".epcb"].includes(extension)) return "pcb";
-  if ([".kicad_sym", ".schlib", ".esym"].includes(extension)) return "symbol_library";
+  if ([".kicad_sym", ".schlib", ".esym", ".lbr"].includes(extension)) return "symbol_library";
   if ([".kicad_mod", ".pcblib", ".intlib", ".efoo"].includes(extension)) return "footprint_library";
   if ([".kicad_dru", ".outjob"].includes(extension)) return "rules";
   if ([".json", ".jsonl"].includes(extension)) return "unknown";
@@ -62,7 +65,8 @@ export async function inventoryAssets(inputs: InputAsset[]): Promise<{
     const hash = await sha256(input.bytes);
     const id = stableId("asset", input.path, hash);
     if (extension === ".brd" && selected === "unknown") diagnostics.push(diagnostic("FORMAT_AMBIGUOUS", `${input.path} 未匹配 Allegro 或 KiCad 的内容签名；.brd 扩展名也用于其他 EDA 工具，未静默猜测格式。`, "error", "format", sourceRef(id, input.path)));
-    if (byExtension !== "unknown" && byContent !== "unknown" && byExtension !== byContent) {
+    // An EAGLE `.sch` shares KiCad 5's extension: the content decides, without a warning.
+    if (byExtension !== "unknown" && byContent !== "unknown" && byExtension !== byContent && !(byContent === "eagle" && EAGLE_EXTENSIONS.has(extension))) {
       diagnostics.push(
         diagnostic(
           "FORMAT_EXTENSION_MISMATCH",
@@ -91,13 +95,13 @@ export async function inventoryAssets(inputs: InputAsset[]): Promise<{
       result[asset.detectedFormat] += 1;
       return result;
     },
-    { eagle: 0, kicad: 0, altium: 0, allegro: 0, easyeda: 0, unknown: 0 },
+    { kicad: 0, altium: 0, allegro: 0, easyeda: 0, eagle: 0, unknown: 0 },
   );
   const allegroEntry = assets.some(a => a.fileName === ALLEGRO_MANIFEST || a.detectedFormat === "allegro" && a.extension === ".brd");
   const drawings=assets.filter(a=>['schematic','pcb'].includes(a.entryRole));
   const drawingCounts=(format:SourceFormat)=>drawings.filter(a=>a.detectedFormat===format).length;
   const convertedKiCad=assets.some(a=>a.extension==='.kicad_sch')&&assets.some(a=>a.extension==='.kicad_pcb');
-  const sourceFormat = allegroEntry ? "allegro" : convertedKiCad ? "kicad" : (["eagle", "kicad", "easyeda", "altium", "allegro"] as SourceFormat[]).sort(
+  const sourceFormat = allegroEntry ? "allegro" : convertedKiCad ? "kicad" : (["kicad", "easyeda", "altium", "allegro", "eagle"] as SourceFormat[]).sort(
     (left, right) => drawingCounts(right)-drawingCounts(left)||counts[right] - counts[left],
   )[0];
   if (!sourceFormat || counts[sourceFormat] === 0) {
@@ -119,4 +123,3 @@ export async function inventoryAssets(inputs: InputAsset[]): Promise<{
   }
   return { assets, diagnostics, sourceFormat };
 }
-

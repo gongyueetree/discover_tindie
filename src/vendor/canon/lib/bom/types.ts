@@ -45,4 +45,3 @@ export type BomMapping = {
   updatedAt: string;
   message: string;
 };
-

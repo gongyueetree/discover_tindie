@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { CanonicalIrBundle } from "./types";
 
 export const IR_DOMAIN_KEYS = ["project", "schematic", "pcb", "part", "net"] as const;
@@ -67,4 +68,3 @@ export function createIrDomainExport(bundle: CanonicalIrBundle, domain: IrDomain
     data: domainData[domain].data,
   };
 }
-

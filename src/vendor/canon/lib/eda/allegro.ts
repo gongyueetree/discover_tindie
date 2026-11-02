@@ -1,3 +1,4 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import { parseKicad, type KicadParseOutput } from "./kicad";
 import { ALLEGRO_MANIFEST, isAllegroBoard, readAllegroManifest } from "./allegro-format";
 import type { InputAsset, SourceAsset } from "./types";
@@ -60,4 +61,3 @@ export function parseAllegro(inputs: InputAsset[], inventory: SourceAsset[]): Ki
   }
   return output;
 }
-

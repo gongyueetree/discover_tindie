@@ -1,4 +1,4 @@
-import {sha256 as hashSha256} from "@noble/hashes/sha256";
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import type { IrPoint, ParseDiagnostic, SourceRef } from "./types";
 
 export function stableId(namespace: string, ...parts: Array<string | number | undefined>): string {
@@ -18,7 +18,7 @@ export function stableId(namespace: string, ...parts: Array<string | number | un
 
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const safeBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const digest = globalThis.crypto?.subtle ? await crypto.subtle.digest("SHA-256", safeBuffer) : hashSha256(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", safeBuffer);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -78,4 +78,3 @@ export function numericString(value: unknown, fallback = "0"): string {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return fallback;
 }
-

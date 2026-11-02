@@ -76,8 +76,10 @@ export default function PlannerLibrary({
     setError("");
     try {
       if (source === "ezplm") {
-        const d = await read("/api/maker/parts?" + new URLSearchParams({ q }));
+        // Only parts whose footprint is in the official KiCad library can be placed.
+        const d = await read("/api/maker/planner-parts?" + new URLSearchParams({ q }));
         setParts(d.items);
+        if (!d.items.length) setError("No parts with a KiCad footprint match this number. Try the first few characters.");
       }
     } catch (e) {
       setError(String(e));
@@ -196,14 +198,20 @@ export default function PlannerLibrary({
           : parts.map((p) => (
               <button
                 key={p.id}
-                className="planner-part"
+                className="planner-part planner-part-rich"
                 disabled={busy}
                 onClick={() => void add(p.package || p.mpn, p)}
+                title={`Add ${p.mpn} to the board`}
               >
-                <b>{p.mpn}</b>
-                <small>
-                  {p.manufacturer} · {p.package}
-                </small>
+                <span className="planner-part-head">
+                  <b>{p.mpn}</b>
+                  <span>· {p.manufacturer}</span>
+                </span>
+                {p.description && <span className="planner-part-desc">{p.description}</span>}
+                <span className="planner-part-tags">
+                  <span className="pill">{p.footprintName || p.package}</span>
+                  {p.category && <span className="pill muted">{p.category}</span>}
+                </span>
               </button>
             ))}
       </div>

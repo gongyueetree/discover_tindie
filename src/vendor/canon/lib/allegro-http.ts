@@ -1,6 +1,7 @@
+// @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 export const ALLEGRO_WEB_LIMIT = 4 * 1024 * 1024;
 
-export async function boundedBody(stream: ReadableStream<Uint8Array> | null, limit = ALLEGRO_WEB_LIMIT): Promise<Uint8Array> {
+export async function boundedBody(stream: ReadableStream<Uint8Array> | null, limit = ALLEGRO_WEB_LIMIT): Promise<Uint8Array<ArrayBuffer>> {
   if (!stream) throw new Error("EMPTY_BODY");
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -19,4 +20,3 @@ export async function boundedBody(stream: ReadableStream<Uint8Array> | null, lim
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
   return result;
 }
-

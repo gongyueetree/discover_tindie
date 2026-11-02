@@ -266,6 +266,10 @@ export async function importGithub(selection: string, projectId: string) {
       !queue.includes(f.path)
     )
       queue.push(f.path);
+    // KiCad 5 projects keep the symbols their sheets use in <project>-cache.lib (and -rescue.lib);
+    // without them a legacy schematic can only be drawn as bare pins.
+    if (dir === project.directory && /-(cache|rescue)\.lib$/i.test(name) && !queue.includes(f.path))
+      queue.push(f.path);
   }
   const queued = new Set(queue);
   while (queue.length) {
@@ -307,7 +311,7 @@ export async function importGithub(selection: string, projectId: string) {
       throw new SourceError("Selected design exceeds 75 MB.", 413);
     data[path] = b;
     if (
-      /\.(kicad_sch|kicad_pcb|kicad_pro|sch|brd)$/i.test(path) ||
+      /\.(kicad_sch|kicad_pcb|kicad_pro|sch|brd|PrjPcb)$/i.test(path) ||
       /lib-table$/.test(path)
     ) {
       for (const dep of referencedFiles(path, new TextDecoder().decode(b))) {
@@ -331,7 +335,7 @@ export async function importGithub(selection: string, projectId: string) {
   }
   if (
     !Object.keys(data).some((p) =>
-      /\.(kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc)$/i.test(p),
+      /\.(kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(p),
     )
   )
     throw new SourceError("No usable design files could be imported.", 422);
