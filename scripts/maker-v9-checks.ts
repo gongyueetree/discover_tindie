@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {buildBoardMeshes} from '../src/vendor/canon/lib/models/board-mesh';
+import {readFileSync} from 'node:fs';
+const point=(x:number,y:number)=>({x:String(x),y:String(y),unit:'mm'});
+const line=(ax:number,ay:number,bx:number,by:number)=>({kind:'line',geometry:{start:point(ax,ay),end:point(bx,by)}});
+const board:any={boardOutline:[line(0,0,20,0),line(20.01,0,20.01,10),line(20.01,10,0,10),line(0,10,0,0)],pads:[],vias:[],thickness:'1.6'};
+assert.ok(buildBoardMeshes(board)[0].position.length>0);
+board.boardOutline[1]=line(20.1,0,20.01,10);
+assert.throws(()=>buildBoardMeshes(board),/outline is incomplete/);
+console.log('PASS: 0.01mm outline tolerance accepted, larger open outline rejected.');

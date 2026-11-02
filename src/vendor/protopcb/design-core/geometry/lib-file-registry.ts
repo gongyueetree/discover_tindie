@@ -1,0 +1,469 @@
+/**
+ * design-core/geometry/lib-file-registry.ts
+ * 库文件注册表 —— 运行时按需拉取 ezPLM 的 .kicad_mod / .kicad_sym 文件，
+ * 解析后注册为「精确覆盖」：padFootprintFor / symbolFor 优先取覆盖数据；
+ * version 递增驱动画布/3D/详情等订阅方重渲染。拉取中或失败自动回退名字解析。
+ */
+import type { PadFootprint } from './pad-types';
+import { parseKicadMod, parseSExpr, type SExpr } from './kicad-file-parser';
+import { keyOf } from '../../shared/storage';
+
+/* ---------- 覆盖存储（模块级，同步读取） ---------- */
+const footprintOverrides = new Map<string, PadFootprint>(); // key: 封装名
+export interface ParsedSymbol {
+  w: number; h: number;
+  rects: { x: number; y: number; w: number; h: number }[];
+  /** 多边形/折线（运放三角形等），SVG path d */
+  polys: string[];
+  circles: { x: number; y: number; r: number }[];
+  pins: { tipX: number; tipY: number; endX: number; endY: number; name: string; number: string; nameX: number; nameY: number; numX: number; numY: number }[];
+  /** 多单元符号（双运放等）：各单元独立几何，原理图可分开摆放 */
+  units?: ParsedSymbol[];
+}
+const symbolOverrides = new Map<string, ParsedSymbol>(); // key: mpn（拼合版，详情预览用）
+const symbolUnitsOverrides = new Map<string, ParsedSymbol[]>(); // key: mpn（分单元，原理图独立摆放用）
+
+/**
+ * 封装覆盖按来源分层，优先级 PROJECT > CUSTOM > LIBRARY > 名字解析兜底。
+ *
+ * 分层的原因是跨项目污染：此前三类来源混在一个 Map 里，导入工程 A 之后再导入 B，
+ * A 的几何会残留；clearAll 也清不干净。PROJECT 层与 doc.importedFootprints 严格同步
+ * （syncProjectFootprints 是唯一写入口），另外两层与文档无关、跨项目保留。
+ */
+const projectFootprints = new Map<string, PadFootprint>();   // 当前导入工程的内嵌定义
+const customFootprints = new Map<string, PadFootprint>();    // 用户自建器件
+// footprintOverrides 保留为 LIBRARY 层（KiCad 官方库 / 远程拉取）
+
+export function footprintOverrideFor(name: string): PadFootprint | undefined {
+  return projectFootprints.get(name) ?? customFootprints.get(name) ?? footprintOverrides.get(name);
+}
+
+/**
+ * 把 PROJECT 层整体换成给定定义（唯一写入口）。
+ * 导入、恢复存档、undo/redo、清空画布都必须经过它 —— 保证运行时几何与
+ * doc.importedFootprints 始终一致，且只 bump 一次。
+ */
+export function syncProjectFootprints(defs?: Record<string, PadFootprint>): void {
+  projectFootprints.clear();
+  for (const [name, fp] of Object.entries(defs ?? {})) projectFootprints.set(name, fp);
+  bumpLibRegistry();
+}
+
+/** 自建器件层：跨项目保留，不随工程导入清除 */
+export function registerCustomFootprint(name: string, fp: PadFootprint): void {
+  customFootprints.set(name, fp);
+  bumpLibRegistry();
+}
+export function symbolOverrideFor(mpn: string): ParsedSymbol | undefined {
+  return symbolOverrides.get(mpn);
+}
+export function symbolUnitsOverrideFor(mpn: string): ParsedSymbol[] | undefined {
+  return symbolUnitsOverrides.get(mpn);
+}
+
+/** 定制器件库等外部来源注册符号/封装覆盖 */
+export function registerSymbolOverride(mpn: string, ps: ParsedSymbol) {
+  symbolOverrides.set(mpn, ps);
+  bumpLibRegistry();
+}
+/** 仅供测试：清空全部层（模拟刷新后注册表为空的状态） */
+export function clearFootprintOverrides(): void {
+  footprintOverrides.clear();
+  projectFootprints.clear();
+  customFootprints.clear();
+  bumpLibRegistry();
+}
+
+/** LIBRARY 层：官方库 / 远程文件解析出的封装（优先级最低） */
+export function registerFootprintOverride(name: string, fp: PadFootprint) {
+  footprintOverrides.set(name, fp);
+  bumpLibRegistry();
+}
+
+/* ---------- 版本通知（框架无关的观察者；React hook 在 state/libFileStore） ---------- */
+// Domain 不依赖 zustand/React：这里只维护一个自增版本号与订阅者列表，
+// UI 侧的 useLibFileStore 订阅它。注册表被任何来源（官方库 / 工程内嵌 / 自建）更新时 bump。
+let libVersion = 0;
+const listeners = new Set<() => void>();
+export const libRegistryVersion = () => libVersion;
+export function bumpLibRegistry(): void {
+  libVersion += 1;
+  for (const fn of listeners) fn();
+}
+export function subscribeLibRegistry(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+}
+
+const inflight = new Set<string>();
+const failed = new Set<string>();
+
+export type LibFileStatus = 'loaded' | 'loading' | 'failed' | 'nourl';
+
+/** 库文件加载状态（详情面板可见提示用） */
+export function footprintFileStatus(fpName: string, url: string | undefined): LibFileStatus {
+  if (footprintOverrides.has(fpName)) return 'loaded';
+  if (!url) return 'nourl';
+  if (inflight.has(url)) return 'loading';
+  if (failed.has(url)) return 'failed';
+  return 'loading';
+}
+export function symbolFileStatus(mpn: string, url: string | undefined): LibFileStatus {
+  if (symbolOverrides.has(mpn)) return 'loaded';
+  if (!url) return 'nourl';
+  if (inflight.has(url)) return 'loading';
+  if (failed.has(url)) return 'failed';
+  return 'loading';
+}
+
+async function fetchViaProxy(url: string): Promise<string | null> {
+  try {
+    const r = await fetch(`/api/ezplm?path=file&url=${encodeURIComponent(url)}`);
+    if (!r.ok) return null;
+    return await r.text();
+  } catch {
+    return null;
+  }
+}
+
+/** 按需拉取并注册封装文件（幂等；重复调用无副作用） */
+export function ensureFootprintFile(fpName: string, url: string | undefined) {
+  if (!url || footprintOverrides.has(fpName) || inflight.has(url) || failed.has(url)) return;
+  inflight.add(url);
+  fetchViaProxy(url).then((text) => {
+    inflight.delete(url);
+    const parsed = text ? parseKicadMod(text) : null;
+    if (parsed) {
+      footprintOverrides.set(fpName, parsed);
+      bumpLibRegistry();
+    } else {
+      failed.add(url);
+      console.warn('[libfile] 封装文件解析失败，回退名字解析:', fpName, url);
+    }
+  });
+}
+
+/* ---------- .kicad_sym 解析 ---------- */
+
+const isList = (e: SExpr): e is SExpr[] => Array.isArray(e);
+const head = (e: SExpr): string => (isList(e) ? String(e[0]) : String(e));
+const find = (l: SExpr[], t: string) => l.find((e): e is SExpr[] => isList(e) && head(e) === t);
+const findAll = (l: SExpr[], t: string) => l.filter((e): e is SExpr[] => isList(e) && head(e) === t);
+const num = (l: SExpr[] | undefined, i: number) => (l ? parseFloat(String(l[i])) || 0 : 0);
+
+/** KiCad 符号 mm(Y上) → 画布 px(Y下)，2.54mm 引脚栅格 ↔ 10px 栅格 */
+const S = 10 / 2.54;
+
+/** 三点弧 → 折线采样 path（16 段）：px 空间求圆心，扫向经中点校验，避免 SVG 弧 flag 边界问题 */
+function arcToPath(p1: { x: number; y: number }, pm: { x: number; y: number }, p2: { x: number; y: number }): string | null {
+  const ax = p1.x, ay = p1.y, bx = pm.x, by = pm.y, cx = p2.x, cy = p2.y;
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-6) return `M${ax.toFixed(1)},${ay.toFixed(1)} L${cx.toFixed(1)},${cy.toFixed(1)}`; // 三点共线退化为直线
+  const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+  const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+  const r = Math.hypot(ax - ux, ay - uy);
+  const a1 = Math.atan2(ay - uy, ax - ux);
+  const amid = Math.atan2(by - uy, bx - ux);
+  const a2 = Math.atan2(cy - uy, cx - ux);
+  const norm = (t: number) => { let v = t; while (v < 0) v += Math.PI * 2; return v % (Math.PI * 2); };
+  // 逆时针扫过量；若中点不在该方向弧上则反向
+  let sweep = norm(a2 - a1);
+  if (norm(amid - a1) > sweep + 1e-9) sweep = sweep - Math.PI * 2;
+  const N = 16;
+  const pts: string[] = [];
+  for (let i = 0; i <= N; i++) {
+    const t = a1 + (sweep * i) / N;
+    pts.push(`${i === 0 ? 'M' : 'L'}${(ux + r * Math.cos(t)).toFixed(1)},${(uy + r * Math.sin(t)).toFixed(1)}`);
+  }
+  return pts.join(' ');
+}
+
+export function parseKicadSym(text: string): ParsedSymbol | null {
+  try {
+    const roots = parseSExpr(text);
+    const lib = roots.find((r): r is SExpr[] => isList(r) && head(r) === 'kicad_symbol_lib');
+    const symRoot = lib ? find(lib, 'symbol') : roots.find((r): r is SExpr[] => isList(r) && head(r) === 'symbol');
+    if (!symRoot) return null;
+
+    // 按【单元】分组收集图形与引脚（多单元符号如双运放 LM358：_1_1/_2_1/_3_1；_0_* 为公共图形）
+    interface RawUnit { rects: SExpr[][]; polys: SExpr[][]; circles: SExpr[][]; arcs: SExpr[][]; pins: SExpr[][] }
+    const units = new Map<number, RawUnit>();
+    const unitOf = (name: string): number => {
+      const m = name.match(/_(\d+)_\d+$/);
+      return m ? parseInt(m[1], 10) : 1;
+    };
+    const bucket = (u: number): RawUnit => {
+      if (!units.has(u)) units.set(u, { rects: [], polys: [], circles: [], arcs: [], pins: [] });
+      return units.get(u)!;
+    };
+    // 根符号直挂的图形归单元 1
+    const rootB = bucket(1);
+    rootB.rects.push(...findAll(symRoot, 'rectangle'));
+    rootB.polys.push(...findAll(symRoot, 'polyline'));
+    rootB.circles.push(...findAll(symRoot, 'circle'));
+    rootB.arcs.push(...findAll(symRoot, 'arc'));
+    rootB.pins.push(...findAll(symRoot, 'pin'));
+    for (const sub of findAll(symRoot, 'symbol')) {
+      const u = unitOf(String(sub[1] ?? ''));
+      const b = bucket(u);
+      b.rects.push(...findAll(sub, 'rectangle'));
+      b.polys.push(...findAll(sub, 'polyline'));
+      b.circles.push(...findAll(sub, 'circle'));
+      b.arcs.push(...findAll(sub, 'arc'));
+      b.pins.push(...findAll(sub, 'pin'));
+    }
+    // 公共单元 0 合并进最小编号的实际单元
+    const realUnits = [...units.keys()].filter((u) => u > 0).sort((a, b) => a - b);
+    if (units.has(0) && realUnits.length) {
+      const tgt = bucket(realUnits[0]), src = units.get(0)!;
+      tgt.rects.push(...src.rects); tgt.polys.push(...src.polys);
+      tgt.circles.push(...src.circles); tgt.arcs.push(...src.arcs); tgt.pins.push(...src.pins);
+      units.delete(0);
+    }
+    const g = 2.54;
+    const S2 = S; // px per mm
+    // 逐单元解析原始 mm 坐标并计算包围盒
+    const parsedUnits = realUnits.map((u) => {
+      const b = units.get(u)!;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      const grow = (x: number, y: number) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); };
+      const pins = b.pins.map((pn) => {
+        const at = find(pn, 'at');
+        const len = num(find(pn, 'length'), 1) || 2.54;
+        const x = num(at, 1), y = num(at, 2), ang = num(at, 3);
+        const rad = (ang * Math.PI) / 180;
+        const ex = x + Math.cos(rad) * len, ey = y + Math.sin(rad) * len;
+        grow(x, y); grow(ex, ey);
+        const nameL = find(pn, 'name'), numL = find(pn, 'number');
+        return { x, y, ex, ey, name: String(nameL?.[1] ?? ''), number: String(numL?.[1] ?? '') };
+      });
+      const rects = b.rects.map((r) => {
+        const s1 = find(r, 'start'), e1 = find(r, 'end');
+        const x1 = num(s1, 1), y1 = num(s1, 2), x2 = num(e1, 1), y2 = num(e1, 2);
+        grow(x1, y1); grow(x2, y2);
+        return { x1, y1, x2, y2 };
+      });
+      const polys = b.polys.map((pl) => {
+        const pts = find(pl, 'pts');
+        const xy = pts ? findAll(pts, 'xy').map((q) => ({ x: num(q, 1), y: num(q, 2) })) : [];
+        xy.forEach((q) => grow(q.x, q.y));
+        return xy;
+      }).filter((xy) => xy.length >= 2);
+      const arcs = b.arcs.map((ar) => {
+        const s1 = find(ar, 'start'), m1 = find(ar, 'mid'), e1 = find(ar, 'end');
+        if (!s1 || !m1 || !e1) return null;
+        const a = { x1: num(s1, 1), y1: num(s1, 2), xm: num(m1, 1), ym: num(m1, 2), x2: num(e1, 1), y2: num(e1, 2) };
+        grow(a.x1, a.y1); grow(a.xm, a.ym); grow(a.x2, a.y2);
+        return a;
+      }).filter((a): a is NonNullable<typeof a> => !!a);
+      const circles = b.circles.map((ci) => {
+        const c1 = find(ci, 'center');
+        const r1 = num(find(ci, 'radius'), 1);
+        const cx = num(c1, 1), cy = num(c1, 2);
+        grow(cx - r1, cy - r1); grow(cx + r1, cy + r1);
+        return { cx, cy, r: r1 };
+      });
+      if (!pins.length && !rects.length && !polys.length && !arcs.length) return null;
+      if (!Number.isFinite(minX)) { minX = 0; maxX = 0; minY = 0; maxY = 0; }
+      return { pins, rects, polys, circles, arcs, minX, maxX, minY, maxY };
+    }).filter((x): x is NonNullable<typeof x> => !!x);
+    if (!parsedUnits.length || !parsedUnits.some((u) => u.pins.length)) return null;
+
+    // 每单元先各自归一化为独立 ParsedSymbol（原理图可分开摆放）
+    const unitSymbols: ParsedSymbol[] = [];
+    // 单元水平排布拼合版（详情预览用）：x 偏移取 10px 倍数
+    const out: ParsedSymbol = { w: 0, h: 0, rects: [], polys: [], circles: [], pins: [], units: unitSymbols };
+    let xCursor = 0;
+    for (const un of parsedUnits) {
+      const ox = Math.floor(un.minX / g) * g;
+      const oyTop = Math.ceil(un.maxY / g) * g;
+      const toPx = (x: number, y: number) => ({ x: xCursor + (x - ox) * S2, y: (oyTop - y) * S2 });
+      const wh = { w: (Math.ceil(un.maxX / g) * g - ox) * S2, h: (oyTop - Math.floor(un.minY / g) * g) * S2 };
+      for (const r of un.rects) {
+        const a = toPx(Math.min(r.x1, r.x2), Math.max(r.y1, r.y2));
+        out.rects.push({ x: a.x, y: a.y, w: Math.abs(r.x2 - r.x1) * S2, h: Math.abs(r.y2 - r.y1) * S2 });
+      }
+      for (const pl of un.polys) {
+        const d = pl.map((q, i) => { const a = toPx(q.x, q.y); return `${i === 0 ? 'M' : 'L'}${a.x.toFixed(1)},${a.y.toFixed(1)}`; }).join(' ');
+        out.polys.push(d);
+      }
+      for (const ci of un.circles) {
+        const a = toPx(ci.cx, ci.cy);
+        out.circles.push({ x: a.x, y: a.y, r: ci.r * S2 });
+      }
+      for (const ar of un.arcs) {
+        const d = arcToPath(toPx(ar.x1, ar.y1), toPx(ar.xm, ar.ym), toPx(ar.x2, ar.y2));
+        if (d) out.polys.push(d);
+      }
+      for (const p of un.pins) {
+        const tip = toPx(p.x, p.y), end = toPx(p.ex, p.ey);
+        out.pins.push({
+          tipX: tip.x, tipY: tip.y, endX: end.x, endY: end.y,
+          name: p.name === '~' ? '' : p.name, number: p.number,
+          nameX: Math.abs(end.x - tip.x) < 0.5 ? end.x + 2 : end.x + (end.x >= tip.x ? 3 : -3),
+          nameY: Math.abs(end.x - tip.x) < 0.5 ? end.y + (end.y >= tip.y ? 8 : -5) : end.y + 2.5,
+          numX: (tip.x + end.x) / 2, numY: (tip.y + end.y) / 2 - 2,
+        });
+      }
+      // 独立单元版本（局部坐标从 0 开始）
+      const toPx0 = (x: number, y: number) => ({ x: (x - ox) * S2, y: (oyTop - y) * S2 });
+      unitSymbols.push({
+        w: wh.w, h: wh.h,
+        rects: un.rects.map((r) => { const a = toPx0(Math.min(r.x1, r.x2), Math.max(r.y1, r.y2)); return { x: a.x, y: a.y, w: Math.abs(r.x2 - r.x1) * S2, h: Math.abs(r.y2 - r.y1) * S2 }; }),
+        polys: [
+          ...un.polys.map((pl) => pl.map((q, i) => { const a = toPx0(q.x, q.y); return `${i === 0 ? 'M' : 'L'}${a.x.toFixed(1)},${a.y.toFixed(1)}`; }).join(' ')),
+          ...un.arcs.map((ar) => arcToPath(toPx0(ar.x1, ar.y1), toPx0(ar.xm, ar.ym), toPx0(ar.x2, ar.y2))).filter((d): d is string => !!d),
+        ],
+        circles: un.circles.map((ci) => { const a = toPx0(ci.cx, ci.cy); return { x: a.x, y: a.y, r: ci.r * S2 }; }),
+        pins: un.pins.map((pp) => {
+          const tip = toPx0(pp.x, pp.y), end = toPx0(pp.ex, pp.ey);
+          return { tipX: tip.x, tipY: tip.y, endX: end.x, endY: end.y, name: pp.name === '~' ? '' : pp.name, number: pp.number,
+            nameX: Math.abs(end.x - tip.x) < 0.5 ? end.x + 2 : end.x + (end.x >= tip.x ? 3 : -3),
+          nameY: Math.abs(end.x - tip.x) < 0.5 ? end.y + (end.y >= tip.y ? 8 : -5) : end.y + 2.5, numX: (tip.x + end.x) / 2, numY: (tip.y + end.y) / 2 - 2 };
+        }),
+      });
+      out.h = Math.max(out.h, wh.h);
+      xCursor += Math.ceil((wh.w + 20) / 10) * 10; // 单元间隔，保持 10px 栅格
+    }
+    out.w = Math.max(10, xCursor - 20);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** 按需拉取并注册符号文件（key = mpn） */
+export function ensureSymbolFile(mpn: string, url: string | undefined) {
+  if (!url || symbolOverrides.has(mpn) || inflight.has(url) || failed.has(url)) return;
+  inflight.add(url);
+  fetchViaProxy(url).then((text) => {
+    inflight.delete(url);
+    const parsed = text ? parseKicadSym(text) : null;
+    if (parsed) {
+      symbolOverrides.set(mpn, parsed);
+      if (parsed.units && parsed.units.length > 1) symbolUnitsOverrides.set(mpn, parsed.units);
+      bumpLibRegistry();
+    } else {
+      failed.add(url);
+      console.warn('[libfile] 符号文件解析失败，回退内置符号:', mpn, url);
+    }
+  });
+}
+
+// ── KiCad 官方符号自愈：override 是内存态，刷新即失；symbolFromMpn 里的
+//    KICADSYM:lib:name 编码了完整来源，缺失时自动重拉注册（localStorage 加速） ──
+const ksymInflight = new Set<string>();
+const ksymStatus = new Map<string, string>();
+/** KICADSYM 自愈状态（供 UI 展示：拉取中/失败原因） */
+export function kicadSymbolStatus(key: string | undefined): string | undefined {
+  return key ? ksymStatus.get(key) : undefined;
+}
+function setKsymStatus(key: string, st: string) {
+  ksymStatus.set(key, st);
+  bumpLibRegistry();
+}
+export function ensureKicadSymbol(key: string | undefined): void {
+  if (!key || symbolOverrideFor(key) || ksymInflight.has(key)) return;
+  // KICADSCH:*（工程 zip 内嵌符号）只有 localStorage 一个复原源
+  if (key.startsWith('KICADSCH:')) {
+    try {
+      const cached = localStorage.getItem(keyOf.ksym(key));
+      if (cached) {
+        const ps = parseKicadSym(cached);
+        if (ps && ps.pins.length) registerSymbolOverride(key, ps);
+      }
+    } catch { /* 忽略 */ }
+    return;
+  }
+  if (!key.startsWith('KICADSYM:')) return;
+  const parts = key.split(':');
+  const lib = parts[1];
+  const name = parts.slice(2).join(':');
+  if (!lib || !name) return;
+  ksymInflight.add(key);
+  setKsymStatus(key, '符号自动恢复中…');
+  const cacheK = keyOf.ksym(key);
+  const apply = (text: string): boolean => {
+    const ps = parseKicadSym(text);
+    if (ps && ps.pins.length) { registerSymbolOverride(key, ps); setKsymStatus(key, '✓'); return true; }
+    setKsymStatus(key, `解析失败（${ps ? '0管脚' : '格式异常'}；开头：${text.slice(0, 40).replace(/\s+/g, ' ')}）`);
+    return false;
+  };
+  try {
+    const cached = localStorage.getItem(cacheK);
+    if (cached && apply(cached)) { ksymInflight.delete(key); return; }
+  } catch { /* localStorage 不可用则直接走网络 */ }
+  fetch(`/api/kicadlib?path=sym&lib=${encodeURIComponent(lib)}&name=${encodeURIComponent(name)}`)
+    .then(async (r) => {
+      if (r.ok) return r.text();
+      let d = '';
+      try { d = String((await r.json())?.error ?? ''); } catch { /* 非 JSON */ }
+      throw new Error(`HTTP ${r.status}${d ? ' · ' + d : ''}`);
+    })
+    .then((text) => {
+      try { localStorage.setItem(cacheK, text); } catch { /* 空间不足忽略 */ }
+      apply(text);
+    })
+    .catch((e) => {
+      setKsymStatus(key, `拉取失败：${(e as Error).message}`);
+      console.warn('[ksym]', key, e);
+    })
+    .then(() => ksymInflight.delete(key));
+}
+
+/* ---------- KiCad 官方符号库：按型号自动检索 ---------- */
+
+const kmpnInflight = new Set<string>();
+const kmpnMiss = new Set<string>();   // 官方库确实没有的型号，本会话不再重复请求
+
+/**
+ * 按 MPN 到 KiCad 官方符号库检索并注册符号。
+ *
+ * 为什么需要它：导入的工程或 ezPLM 物料常常没有符号文件链接，此前会退回到
+ * 「按名字猜」的通用符号（运放画成三角形、IC 画成方框），既不符合 KLC，
+ * 也和真实器件的引脚定义对不上。官方库里有的型号，一律用官方符号。
+ *
+ * 匹配口径（保守）：symsearch 返回的符号名与 MPN 规范化后必须是
+ * 完全相等或官方名是 MPN 的前缀（如 MPN「LM358DR」→ 官方「LM358」），
+ * 不做模糊近似 —— 符号错了比没有符号更危险。
+ */
+export function ensureKicadSymbolByMpn(mpn: string | undefined): void {
+  const key = (mpn ?? '').trim();
+  if (!key || key.length < 3) return;
+  if (symbolOverrideFor(key) || kmpnInflight.has(key) || kmpnMiss.has(key)) return;
+  const norm = (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const target = norm(key);
+  if (!target) return;
+
+  kmpnInflight.add(key);
+  const cacheK = keyOf.ksymMpn(key);
+  const apply = (text: string): boolean => {
+    const ps = parseKicadSym(text);
+    if (ps && ps.pins.length) { registerSymbolOverride(key, ps); return true; }
+    return false;
+  };
+  try {
+    const cached = localStorage.getItem(cacheK);
+    if (cached && apply(cached)) { kmpnInflight.delete(key); return; }
+  } catch { /* localStorage 不可用则走网络 */ }
+
+  fetch(`/api/kicadlib?path=symsearch&q=${encodeURIComponent(key)}&limit=5`)
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then((j: { items?: { lib: string; name: string }[] }) => {
+      const hit = (j.items ?? []).find((it) => {
+        const n = norm(it.name);
+        return n === target || target.startsWith(n) && n.length >= Math.min(5, target.length);
+      });
+      if (!hit) { kmpnMiss.add(key); return null; }
+      return fetch(`/api/kicadlib?path=sym&lib=${encodeURIComponent(hit.lib)}&name=${encodeURIComponent(hit.name)}`)
+        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))));
+    })
+    .then((text) => {
+      if (!text) return;
+      try { localStorage.setItem(cacheK, text); } catch { /* 空间不足忽略 */ }
+      if (!apply(text)) kmpnMiss.add(key);
+    })
+    .catch(() => { kmpnMiss.add(key); })
+    .then(() => kmpnInflight.delete(key));
+}
+

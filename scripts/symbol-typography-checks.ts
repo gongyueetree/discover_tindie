@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {applySymbolTypography} from '../src/lib/maker/symbol-typography';
+const source=`(kicad_symbol_lib (version 20231120) (symbol "Example" (pin_names (offset 0.635)) (symbol "Example_1_1" (pin input line (at -5.08 2.54 0) (length 2.54) (name "INPUT" (effects (font (size 1.016 1.016)))) (number "1" (effects (font (size 0.762 0.762))))))))`;
+const preview={name:'Example',pins:[{number:'1',x:-5.08,y:-2.54,length:2.54,angle:0}]};
+const result=applySymbolTypography(preview,source);
+assert.equal(result.pins[0].nameSize,1.016);
+assert.equal(result.pins[0].numberSize,.762);
+assert.equal(result.pins[0].nameOffset,.635);
+assert.equal(result.pins[0].x,preview.pins[0].x);
+assert.equal(result.pins[0].y,preview.pins[0].y);
+assert.equal(result.pins[0].length,preview.pins[0].length);
+assert.equal(preview.pins[0].x,-5.08);
+console.log('KiCad source text sizes/offset preserved; pin geometry unchanged.');

@@ -1,0 +1,17 @@
+node_modules
+.next
+# Ignore every dotenv variant (including .env.vercel from `vercel env pull`),
+# but keep the committed example. Prevents secrets from ever being tracked.
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.vercel
+
+
+.next-build/
+.preview.log
+*.tsbuildinfo
+
+.qa/

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {estimate,rowPrice} from '../src/lib/maker/bom';
+import type {BomRow} from '../src/lib/maker/types';
+const row:BomRow={id:'1',reference:'R1,R2',quantity:2,value:'10k',mpn:'',manufacturer:'',package:'0603',original:{},status:'unmatched'};
+assert.equal(rowPrice(row,3),null);
+assert.equal(estimate([{...row,manualUnitPrice:.12}],3).total,.72);
+assert.equal(estimate([{...row,manualUnitPrice:0}],1).priced,1);
+assert.equal(estimate([{...row,manualUnitPrice:NaN}],1).priced,0);
+const priced:BomRow={...row,status:'confirmed',selected:{id:'p',mpn:'X',manufacturer:'M',description:'',source:'DigiKey',parameters:{},cad:[],offers:[{supplier:'DigiKey',retrievedAt:'2026-10-31T00:00:00Z',sku:'x',currency:'USD',stock:100,moq:10,multiple:1,breaks:[{quantity:1,price:1}]}]}};
+assert.equal(rowPrice(priced,1)?.total,10);
+assert.equal(rowPrice({...priced,manualUnitPrice:.5},1)?.total,1);
+assert.equal(rowPrice({...priced,manualUnitPrice:undefined},1)?.total,10);
+console.log('Manual price overrides, zero prices, missing prices, quantity multiplication and API-price restoration passed.');

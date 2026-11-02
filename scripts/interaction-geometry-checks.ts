@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { makeComponent } from '../src/lib/maker/planner';
+import { placeFree, placementIssue, componentExtentRect } from '../src/lib/maker/planner-rules';
+import { createBoard } from '../src/vendor/protopcb/design-core/document/factory';
+import { boardSilkscreen } from '../src/vendor/canon/lib/models/board-silkscreen';
+import { eagleSilkscreen } from '../src/vendor/canon/lib/models/eagle-silkscreen';
+import { lockModalScroll } from '../src/lib/maker/modal-scroll';
+import type { PcbIr } from '../src/vendor/canon/lib/eda/types';
+const board=createBoard(80,60);
+const first=placeFree(makeComponent('LQFP-48','U1',0,0),[],board)!;
+assert.ok(first);
+const rect=componentExtentRect(first);
+assert.ok(Math.abs(rect.x+rect.width/2-40)<1e-7);
+assert.ok(Math.abs(rect.y+rect.height/2-30)<1e-7);
+const placed=[first];
+for(let i=2;i<=12;i++) {const part=placeFree(makeComponent('SOIC-8',`U${i}`,0,0),placed,board)!;assert.ok(part);assert.equal(placementIssue(part,placed,board),null);placed.push(part);}
+assert.ok(placed[1].placement.xMm>5 && placed[1].placement.yMm>5);
+const source=`(kicad_pcb (gr_text "TEST" (at 12 13) (layer "F.SilkS") (effects (font (size 1 1)))) (gr_line (start 1 2) (end 3 4) (stroke (width .2)) (layer "F.SilkS")) (footprint "X" (at 10 20 90) (fp_text reference "U1" (at 2 0 90) (layer "B.SilkS") (effects (font (size 1 1)) (justify mirror))) (fp_text value "HIDDEN" (at 0 0) (layer "F.SilkS") hide (effects (font (size 1 1))))))`;
+const silk=boardSilkscreen({sourceRefs:[{path:'test.kicad_pcb'}]} as PcbIr,[{path:'test.kicad_pcb',bytes:new TextEncoder().encode(source)}]);
+assert.equal(silk.length,3);assert.equal(silk.find(m=>m.text==='U1')?.position?.y,18);assert.equal(silk.find(m=>m.text==='U1')?.mirror,true);assert.equal(silk.find(m=>m.text==='U1')?.side,'back');
+const eagle=eagleSilkscreen('<eagle><drawing><board><plain><text x="2" y="3" size="1" layer="21">FRONT</text><wire x1="1" y1="2" x2="4" y2="5" layer="22" width=".2"/></plain></board></drawing></eagle>');assert.equal(eagle.length,2);assert.equal(eagle[0].position?.y,-3);assert.equal(eagle[1].side,'back');
+Object.assign(globalThis,{document:{body:{style:{overflow:'auto'}}}});
+const outer=lockModalScroll(),inner=lockModalScroll();outer();assert.equal(document.body.style.overflow,'hidden');inner();assert.equal(document.body.style.overflow,'auto');inner();assert.equal(document.body.style.overflow,'auto');
+console.log('Centered/free-space placement, collision rules, original KiCad/Eagle silkscreen and nested scroll-lock cleanup passed.');
