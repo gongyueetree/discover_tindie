@@ -196,3 +196,37 @@ export async function pdProbe() {
   }
   return out;
 }
+
+const raws = new Map<string, { until: number; value: Promise<{ type: string; body: Uint8Array }> }>();
+
+/** Signed GET of a non-JSON resource (e.g. a design's board.svg), cached for an hour; at most 2 MB. */
+export function pdGetRaw(path: string): Promise<{ type: string; body: Uint8Array }> {
+  const hit = raws.get(path);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (raws.size > 300) raws.clear();
+  const value = (async () => {
+    if (!partdataConfigured()) throw new PartdataError("The parts database is not connected.", 503, "unconfigured");
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const nonce = randomBytes(12).toString("hex");
+    let r: Response;
+    try {
+      r = await fetch(BASE() + path, {
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(20000),
+        headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
+      });
+    } catch {
+      throw new PartdataError("The parts database is unreachable right now.", 502, "unreachable", true);
+    }
+    if (!r.ok) throw new PartdataError(r.status === 404 ? "Not found." : `HTTP ${r.status}`, r.status === 404 ? 404 : 502);
+    const len = Number(r.headers.get("content-length") || 0);
+    if (len > 2 * 1024 * 1024) throw new PartdataError("Preview too large.", 502);
+    const body = new Uint8Array(await r.arrayBuffer());
+    if (body.length > 2 * 1024 * 1024) throw new PartdataError("Preview too large.", 502);
+    return { type: r.headers.get("content-type") || "application/octet-stream", body };
+  })();
+  raws.set(path, { until: Date.now() + 3600_000, value });
+  value.catch(() => raws.delete(path));
+  return value;
+}

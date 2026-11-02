@@ -106,7 +106,10 @@ export type DesignCard = {
   edaTool: string | null;
   partCount: number;
   summary: string | null;
+  /** Title image: null = none; undefined = the parts database did not say (older API — look it up per design). */
   coverImageUrl?: string | null;
+  /** A PCB preview generated from the design's board file is available at /api/maker/circuits/{id}/board.svg. */
+  boardPreview?: boolean;
 };
 function toDesign(d: any): DesignCard {
   return {
@@ -120,7 +123,8 @@ function toDesign(d: any): DesignCard {
     edaTool: d.eda_tool || null,
     partCount: Number(d.part_count) || 0,
     summary: d.summary ? englishText(d.summary) : null,
-    coverImageUrl: link(d.cover_image_url) || null,
+    coverImageUrl: "cover_image_url" in d ? link(d.cover_image_url) || null : undefined,
+    boardPreview: !!d.board_preview,
   };
 }
 
@@ -482,4 +486,59 @@ export async function plannerParts(q: string, visitor: string) {
     ? rows.map(toPart)
     : (await Promise.allSettled(rows.slice(0, 12).map((x) => partDetail(x.id, visitor)))).flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
   return parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
+}
+
+/* ------------------------------------------------------------------ vendor design pictures */
+
+const vendorImages = new Map<string, { until: number; value: Promise<string | null> }>();
+
+/**
+ * A vendor reference design's picture: the og:image / twitter:image its own page publishes.
+ * Only for known manufacturer sites (VENDOR_SITES), HTTPS, no redirects off-site, 6 s, 1 MB;
+ * cached a day, misses included. Returns null when there is none.
+ */
+export function vendorImage(sourceUrl: string): Promise<string | null> {
+  const hit = vendorImages.get(sourceUrl);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (vendorImages.size > 500) vendorImages.clear();
+  const value = (async () => {
+    let u: URL;
+    try {
+      u = new URL(sourceUrl);
+    } catch {
+      return null;
+    }
+    const host = u.hostname.replace(/^www\./, "");
+    if (u.protocol !== "https:" || u.username || u.password || !VENDOR_SITES.some(([re]) => re.test(host))) return null;
+    try {
+      const r = await fetch(u, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(6000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; TindieDiscover/1.0)", Accept: "text/html" },
+      });
+      const finalHost = new URL(r.url).hostname.replace(/^www\./, "");
+      if (!r.ok || !VENDOR_SITES.some(([re]) => re.test(finalHost)) || !/html/i.test(r.headers.get("content-type") || "")) return null;
+      const reader = r.body?.getReader();
+      if (!reader) return null;
+      let html = "";
+      const dec = new TextDecoder();
+      while (html.length < 1_000_000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        html += dec.decode(value, { stream: true });
+        if (/<\/head>/i.test(html)) break;
+      }
+      await reader.cancel().catch(() => {});
+      const m =
+        html.match(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image)["'][^>]*content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+      if (!m) return null;
+      const img = new URL(m[1].replace(/&amp;/g, "&"), r.url);
+      return img.protocol === "https:" ? img.href : null;
+    } catch {
+      return null;
+    }
+  })();
+  vendorImages.set(sourceUrl, { until: Date.now() + 86_400_000, value });
+  return value;
 }

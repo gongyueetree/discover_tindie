@@ -35,8 +35,17 @@ const routes: Record<string, (c: Call) => unknown> = {
   }),
 };
 let mode: "ok" | "quota" | "down" = "ok";
+const VENDOR_PAGES: Record<string, string> = {
+  "https://www.ti.com/tool/TIDA-00001": '<html><head><meta property="og:image" content="https://www.ti.com/content/dam/ticom/images/tida-00001.png"></head>',
+  "https://evil.example/tool/x": '<html><head><meta property="og:image" content="https://evil.example/x.png"></head>',
+};
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(String(input));
+  if (VENDOR_PAGES[url.href] !== undefined) {
+    const res = new Response(VENDOR_PAGES[url.href], { headers: { "content-type": "text/html; charset=utf-8" } });
+    Object.defineProperty(res, "url", { value: url.href });
+    return res;
+  }
   const c = { url, method: init.method || "GET", headers: new Headers(init.headers), body: String(init.body || "") };
   calls.push(c);
   if (mode === "down") throw new TypeError("fetch failed");
@@ -73,6 +82,11 @@ async function main() {
   assert.deepEqual(d.items.map((x: any) => x.id).sort(), ["d_cccccccccc", "d_eeeeeeeeee"], "0-star open source dropped, vendor kept");
   assert.equal(d.items.find((x: any) => x.kind === "vendor").vendor, "Texas Instruments", "vendor named from its site");
   assert.equal(calls.at(-1)!.url.searchParams.get("part"), "p_aaaaaaaaaa");
+  // vendor design pictures: og:image from the vendor's own page, known manufacturer sites only
+  const { vendorImage } = await import("../src/lib/partdata/maker");
+  assert.equal(await vendorImage("https://www.ti.com/tool/TIDA-00001"), "https://www.ti.com/content/dam/ticom/images/tida-00001.png");
+  assert.equal(await vendorImage("https://evil.example/tool/x"), null, "unknown sites are not fetched");
+  assert.equal(await vendorImage("http://www.ti.com/tool/TIDA-00001"), null, "HTTPS only");
   // design ids are validated before any upstream call
   r = await get("circuits/../../etc");
   assert.equal(r.status, 404);

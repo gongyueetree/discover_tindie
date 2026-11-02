@@ -25,6 +25,7 @@ type Design = {
   partCount: number;
   summary: string | null;
   coverImageUrl?: string | null;
+  boardPreview?: boolean;
 };
 type ModuleNode = { id: string; parent: string | null; name: string; depth: number; minor: boolean; children: ModuleNode[] };
 type Listing = { items: Design[]; total: number; family?: string; widened?: boolean; approximate?: boolean };
@@ -332,13 +333,10 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
   return (
     <li className="atlas-card">
       <button className="atlas-card-pic" onClick={onOpen} tabIndex={-1} aria-hidden>
-        {d.coverImageUrl ? (
-          <img src={d.coverImageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
+        {d.kind === "open_source" ? (
+          <CardPicture d={d} />
         ) : d.kind === "vendor" ? (
-          <span className="atlas-card-nopic atlas-card-vendorpic">
-            <BadgeCheck size={22} aria-hidden />
-            {d.vendor || "Manufacturer"}
-          </span>
+          <CardPicture d={d} vendor />
         ) : (
           <span className="atlas-card-nopic">
             <ImageOff size={20} aria-hidden />
@@ -388,5 +386,59 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * A design's picture: its title image (the repository's social image or README image), else the
+ * PCB preview the parts database drew from the design's board, else "No preview". When the
+ * design list does not carry pictures (older parts database), the card asks once it is visible.
+ */
+function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
+  const board = d.boardPreview ? `/api/maker/circuits/${d.id}/board.svg` : null;
+  // Vendor designs: the picture their own page publishes (looked up on the server).
+  const [sources, setSources] = useState<string[] | null>(
+    vendor || d.coverImageUrl === undefined ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
+  );
+  const [index, setIndex] = useState(0);
+  const host = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (sources !== null || !host.current) return;
+    const el = host.current;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      fetch(`/api/maker/circuits/${d.id}/cover`)
+        .then((r) => (r.ok ? r.json() : { url: null }))
+        .then((x) => setSources(x.url ? [x.url] : []))
+        .catch(() => setSources([]));
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sources, d.id]);
+  const src = sources?.[index];
+  if (src)
+    return (
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className={src.endsWith("/board.svg") ? "atlas-card-board" : undefined}
+        onError={() => setIndex((i) => i + 1)}
+      />
+    );
+  if (vendor)
+    return (
+      <span className="atlas-card-nopic atlas-card-vendorpic" ref={host}>
+        <BadgeCheck size={22} aria-hidden />
+        {d.vendor || "Manufacturer"}
+      </span>
+    );
+  return (
+    <span className="atlas-card-nopic" ref={host}>
+      <ImageOff size={20} aria-hidden />
+      {sources === null ? "Loading preview…" : "No preview"}
+    </span>
   );
 }
