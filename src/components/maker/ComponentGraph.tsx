@@ -19,9 +19,14 @@ export function graphPositions(n: number) {
   });
 }
 import { KIND_COLORS as colors } from "./GraphEmbed";
+const REL = { co_occurrence: "Used together", alternative: "Alternative candidate", series: "Same-series candidate" } as const;
+const REL_COLOR: Record<string, string> = { [REL.co_occurrence]: "#159eae", [REL.alternative]: "#f2762e", [REL.series]: "#7b8fd6" };
 export default function ComponentGraph({ data }: { data: GraphData }) {
   const parts = data.nodes.map((n) => [n.label, n.identity, n.count] as const);
-  const edges = data.edges.map((e) => ({ ...e, type: "Co-occurrence" }));
+  const edges = data.edges.map((e) => ({
+    ...e,
+    type: (REL[(e.type ?? "co_occurrence") as keyof typeof REL] ?? REL.co_occurrence) as string,
+  }));
   const initial = graphPositions(parts.length);
   // matchedPart is the knowledge graph's family key (e.g. STM32F103); labels are member part numbers.
   const focusIndex = data.nodes.findIndex(
@@ -140,8 +145,8 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
     <>
       <ToolHeading
         eyebrow="Component knowledge graph"
-        title="Which parts go together"
-        description="Component families that appear on the same boards across open-source designs. Select a family to see its designs, related families and candidate alternatives."
+        title="Which parts go together — and which could replace them"
+        description="Component families that appear on the same boards across open-source designs. Dashed lines mark replacement candidates (e.g. RP2040 → RP2350). Select a family to see its designs, related families and candidate alternatives."
       />
       {data.scope.matchedPart && focusIndex < 0 && (
         <p className="notice">
@@ -157,7 +162,7 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
         </span>
         <span>
           Snapshot {data.scope.sourceDate ? new Date(data.scope.sourceDate).toLocaleDateString() : "date unknown"}.
-          Appearing on the same board is not proof of an electrical connection or compatibility.
+          Appearing on the same board is not proof of an electrical connection or compatibility, and a replacement candidate is not a verified drop-in: check pinout, package and firmware first.
         </span>
       </div>
       <div className="graph-toolbar">
@@ -174,7 +179,9 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
           Show{" "}
           <select value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option>All relationships</option>
-            <option>Co-occurrence</option>
+            <option>{REL.co_occurrence}</option>
+            <option>{REL.alternative}</option>
+            <option>{REL.series}</option>
           </select>
         </label>
         <div className="graph-controls">
@@ -270,14 +277,14 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
                   y1={positions[e.a].y}
                   x2={positions[e.b].x}
                   y2={positions[e.b].y}
-                  stroke={e.type === "Co-occurrence" ? "#159eae" : "#ee965e"}
+                  stroke={REL_COLOR[e.type]}
                   strokeWidth={
-                    1 +
-                    (5 * e.weight) / Math.max(1, ...edges.map((x) => x.weight))
+                    e.type === REL.co_occurrence
+                      ? 1 + (5 * e.weight) / Math.max(1, ...edges.map((x) => x.weight))
+                      : 2.5
                   }
-                  strokeDasharray={
-                    e.type === "Co-occurrence" ? undefined : "7 6"
-                  }
+                  strokeDasharray={e.type === REL.co_occurrence ? undefined : e.type === REL.alternative ? "7 6" : "2 5"}
+                  strokeLinecap="round"
                   opacity={e.a === selected || e.b === selected ? 0.8 : 0.12}
                 />
               ))}
@@ -357,6 +364,17 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
               </span>
             ))}
           </div>
+          <div className="graph-legend graph-line-legend">
+            {Object.values(REL).map((name) => (
+              <span key={name}>
+                <svg width="26" height="8" aria-hidden="true">
+                  <line x1="1" y1="4" x2="25" y2="4" stroke={REL_COLOR[name]} strokeWidth="2.5" strokeLinecap="round"
+                    strokeDasharray={name === REL.co_occurrence ? undefined : name === REL.alternative ? "7 6" : "2 5"} />
+                </svg>
+                {name}
+              </span>
+            ))}
+          </div>
           <p className="graph-hint">
             Click to highlight · Drag a node to arrange · Drag empty space to
             pan · Use + / − to zoom
@@ -396,14 +414,16 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
             node={data.nodes[selected]}
           />
           <FamilyInfo key={"info-" + data.nodes[selected].id} family={data.nodes[selected].id} />
-          <h3>Related families</h3>
-          {connected.length ? (
-            connected.map((e) => {
+          {(() => {
+            const swaps = connected.filter((e) => e.type !== REL.co_occurrence);
+            const together = connected.filter((e) => e.type === REL.co_occurrence);
+            const row = (e: (typeof connected)[number]) => {
               const id = e.a === selected ? e.b : e.a;
+              const x = e as any;
               return (
                 <button
                   className="graph-relation"
-                  key={id}
+                  key={id + e.type}
                   onClick={() => {
                     setTour(false);
                     setLookup(data.nodes[id].label);
@@ -413,25 +433,48 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
                     {parts[id][0]} <span>↗</span>
                   </b>
                   <small>
-                    {e.weight} designs use both
-                    {(e as any).lift ? ` · ${(e as any).lift.toFixed(1)}× more often than chance` : ""}
-                    {(e as any).strong ? " · strong" : ""}
+                    {e.type === REL.co_occurrence ? (
+                      <>
+                        {e.weight} designs use both
+                        {x.lift ? ` · ${x.lift.toFixed(1)}× more often than chance` : ""}
+                        {x.strong ? " · strong" : ""}
+                      </>
+                    ) : e.type === REL.alternative ? (
+                      <>
+                        Used in similar circuits, rarely on the same board
+                        {typeof x.similarity === "number" ? ` · similarity ${(x.similarity * 100).toFixed(0)}%` : ""}
+                        {x.checks?.pin_count === "pass" ? " · same pin count" : x.checks?.pin_count === "fail" ? " · different pin count" : ""}
+                      </>
+                    ) : (
+                      <>Same manufacturer and product series · shares a circuit role</>
+                    )}
                   </small>
                   <div className="graph-meter">
                     <i
                       style={{
-                        width: `${e.jaccard * 100}%`,
-                        background:
-                          e.type === "Co-occurrence" ? "#129eae" : "#ec9255",
+                        width: `${e.type === REL.co_occurrence ? e.jaccard * 100 : e.type === REL.alternative ? (x.similarity ?? 0.5) * 100 : 60}%`,
+                        background: REL_COLOR[e.type],
                       }}
                     />
                   </div>
                 </button>
               );
-            })
-          ) : (
-            <p>No relationships for this filter.</p>
-          )}
+            };
+            return (
+              <>
+                <h3>Could replace it · candidates</h3>
+                {swaps.length ? swaps.map(row) : <p className="graph-hint">No replacement candidates for this family yet.</p>}
+                {swaps.length > 0 && (
+                  <p className="graph-hint">
+                    Candidates only: pinout, package, electrical and software compatibility are <b>not verified</b>. Check
+                    both datasheets before substituting.
+                  </p>
+                )}
+                <h3>Used together</h3>
+                {together.length ? together.map(row) : <p>No relationships for this filter.</p>}
+              </>
+            );
+          })()}
           <p className="graph-hint">
             Co-occurrence is not electrical connectivity or proof of
             compatibility.

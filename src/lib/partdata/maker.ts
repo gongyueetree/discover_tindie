@@ -284,7 +284,13 @@ const KIND_LABEL: Record<string, string> = {
 };
 export const kindLabel = (k: string | null | undefined) => KIND_LABEL[String(k || "other")] || "Other";
 
+const rawOf = new WeakMap<GraphNode, { manufacturer: string; kind: string }>();
 function node(id: string, label: string, manufacturer: string | null, kind: string | null, count: number | null): GraphNode {
+  const n = nodeOf(id, label, manufacturer, kind, count);
+  rawOf.set(n, { manufacturer: manufacturerEn(manufacturer), kind: String(kind || "") });
+  return n;
+}
+function nodeOf(id: string, label: string, manufacturer: string | null, kind: string | null, count: number | null): GraphNode {
   return {
     id,
     label: label || id,
@@ -327,6 +333,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
         lift: e.lift ?? null,
         confidence: e.confidence_ab ?? null,
         strong: !!e.strong,
+        type: "co_occurrence",
       } as any);
     }
   };
@@ -352,6 +359,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
     );
     for (const h of hoods) if (h.status === "fulfilled") addEdges(h.value.data);
   }
+  await addReplacements(nodes, edges, add, matched, visitor);
   return {
     nodes,
     edges,
@@ -365,7 +373,7 @@ export async function kgGraph(focus: string, visitor: string): Promise<GraphData
       generatedAt: snap.meta?.computed_at || new Date().toISOString(),
       sourceDate: snap.meta?.computed_at || null,
       matchedPart: matched || focus,
-      eligibleNodes: eligible,
+      eligibleNodes: Math.max(eligible, nodes.length),
       snapshotId: snap.data.snapshot_id,
       basis: "Same-board co-occurrence across representative open-source designs",
     } as any,
@@ -541,4 +549,117 @@ export function vendorImage(sourceUrl: string): Promise<string | null> {
   })();
   vendorImages.set(sourceUrl, { until: Date.now() + 86_400_000, value });
   return value;
+}
+
+/* ------------------------------------------------------------------ replacement relations */
+
+const MAX_REPLACEMENT_NODES = 12;
+const commonPrefix = (a: string, b: string) => {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+};
+async function functionsOf(family: string, visitor: string): Promise<Set<string>> {
+  try {
+    const r = await pdGet(`${KG}/families/${encodeURIComponent(family)}/functions`, {}, visitor);
+    return new Set((r.data.items || []).map((x: any) => String(x.function_id)));
+  } catch {
+    return new Set();
+  }
+}
+/** The name stem before the first digit run ends (RP2040 → RP2, STM32F103 → STM32F, TL072 → TL0). */
+const stemOf = (family: string) => family.match(/^[A-Z]*\d/)?.[0] ?? family.slice(0, 3);
+
+/**
+ * Two kinds of "could replace" relations, both CANDIDATES (pinout, package and electrical
+ * compatibility are not verified):
+ * - alternative: partdata's knowledge graph (families used in similar circuits that rarely share a
+ *   board; /families/{f}/alternatives).
+ * - series: same manufacturer, same component type and the same family-name stem (RP2040 / RP2350,
+ *   STM32F103 / STM32F401) — vendor product lines the statistics alone can miss.
+ */
+async function addReplacements(
+  nodes: GraphNode[],
+  edges: GraphData["edges"],
+  add: (n: GraphNode) => number,
+  matched: string,
+  visitor: string,
+) {
+  const sources = (matched ? [nodes.find((n) => n.id === matched)!, ...nodes.filter((n) => n.id !== matched)] : nodes)
+    .filter(Boolean)
+    .slice(0, 8);
+  let added = 0;
+  const has = (a: number, b: number, type: string) =>
+    edges.some((e) => (e as any).type === type && ((e.a === a && e.b === b) || (e.a === b && e.b === a)));
+  const target = (id: string, make: () => GraphNode) => {
+    const existing = nodes.findIndex((n) => n.id === id);
+    if (existing >= 0) return existing;
+    if (added >= MAX_REPLACEMENT_NODES) return -1;
+    added++;
+    return add(make());
+  };
+  const results = await Promise.allSettled(
+    sources.map(async (src) => {
+      const raw = rawOf.get(src) || { manufacturer: src.manufacturer, kind: "" };
+      const [alts, series] = await Promise.allSettled([
+        pdGet(`${KG}/families/${encodeURIComponent(src.id)}/alternatives`, { limit: 6 }, visitor),
+        raw.kind === "ic"
+          ? pdGet(`${KG}/rankings/families`, { q: stemOf(src.id), kind: raw.kind, limit: 50 }, visitor)
+          : Promise.reject(new Error("skip")),
+      ]);
+      return { src, raw, alts, series };
+    }),
+  );
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    const { src, raw, alts, series } = r.value;
+    const a = nodes.indexOf(src);
+    if (alts.status === "fulfilled")
+      for (const alt of alts.value.data.items || []) {
+        const b = target(alt.to, () => node(alt.to, alt.label, alt.manufacturer, raw.kind, alt.usage_count));
+        if (b < 0 || b === a || has(a, b, "alternative")) continue;
+        edges.push({
+          a,
+          b,
+          weight: 0,
+          jaccard: 0,
+          projects: [],
+          type: "alternative",
+          similarity: typeof alt.neighbor_similarity === "number" ? alt.neighbor_similarity : null,
+          checks: alt.checks || {},
+        } as any);
+      }
+    if (series.status === "fulfilled") {
+      const stem = stemOf(src.id);
+      const named = (series.value.data.items || [])
+        .filter(
+          (f: any) =>
+            f.family !== src.id &&
+            f.family.startsWith(stem) &&
+            commonPrefix(f.family, src.id) >= Math.max(3, stem.length) &&
+            Math.abs(f.family.length - src.id.length) <= 3 &&
+            // Same manufacturer where the knowledge graph knows both; a missing one is not a mismatch.
+            (!raw.manufacturer || !f.manufacturer || manufacturerEn(f.manufacturer) === raw.manufacturer),
+        )
+        .sort((x: any, y: any) => commonPrefix(y.family, src.id) - commonPrefix(x.family, src.id))
+        .slice(0, 5);
+      // A shared name stem is not enough (LM358 op amp vs LM317 regulator): the two must also share a
+      // circuit module in partdata's classification; with no module data, a longer common prefix.
+      const mine = await functionsOf(src.id, visitor);
+      const same: any[] = [];
+      for (const f of named) {
+        const theirs = await functionsOf(f.family, visitor);
+        const shared = [...mine].some((m) => theirs.has(m));
+        const knownMaker = !!raw.manufacturer && !!f.manufacturer;
+        // Unknown manufacturer: the shared circuit module is required. Known and equal: a long common prefix also counts.
+        if (shared || (knownMaker && (!mine.size || !theirs.size) && commonPrefix(f.family, src.id) >= 4)) same.push(f);
+        if (same.length >= 3) break;
+      }
+      for (const f of same) {
+        const b = target(f.family, () => node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));
+        if (b < 0 || b === a || has(a, b, "series") || has(a, b, "alternative")) continue;
+        edges.push({ a, b, weight: 0, jaccard: 0, projects: [], type: "series" } as any);
+      }
+    }
+  }
 }

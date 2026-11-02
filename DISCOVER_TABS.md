@@ -174,6 +174,19 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - 应用方法：在 ezplm_partdata 仓库运行 `git am 0001-partner-filters.patch`。
 - partdata 现有测试里有一条（`openapi.json` 列出路由）在未打补丁的 main 上本来就失败，与本补丁无关。
 
+### 知识图谱里的"可替代"关系
+
+图谱除了"同板使用"（实线），还画出两种**替代候选**（虚线），右侧面板单独列在 "Could replace it · candidates"：
+
+| 线型 | 含义 | 来源 |
+| --- | --- | --- |
+| 实线（青色） | Used together：出现在同一块板上 | partdata `neighborhood` |
+| 长虚线（橙色） | Alternative candidate：partdata 的替代候选，附相似度与已比对项 | partdata `families/{f}/alternatives`（每族至少 10 个设计才有） |
+| 点线（蓝紫） | Same-series candidate：同系列候选，例如 RP2040 → RP2350 | 同厂商（任一方未知时不排斥）、同类型、型号主干相同，且在 partdata 里属于同一个电路模块 |
+
+- 只对图中前 8 个器件族查找；每族最多 3 个同系列候选，替代节点总数不超过 12。
+- 两种替代都标为**未验证**：页面提示上线前要核对引脚、封装和固件，不会推断成"可直接替换"。
+
 ## 8. 已知限制 / 需要 partdata 侧配合
 
 - **设计数量**：partdata 只发布"解析成功、至少 5 个可识别器件、有明确许可"的设计。器件族的使用次数（知识图谱）因此会大于可打开的设计数，页面上已说明。

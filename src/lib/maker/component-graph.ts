@@ -35,12 +35,20 @@ export interface GraphNode {
   count: number;
   projects: { id: string; name: string }[];
 }
+export type GraphEdgeType = "co_occurrence" | "alternative" | "series";
 export interface GraphEdge {
   a: number;
   b: number;
   weight: number;
   jaccard: number;
   projects: { id: string; name: string }[];
+  /** co_occurrence (same board), alternative (knowledge-graph candidate), series (same vendor and series). Default co_occurrence. */
+  type?: GraphEdgeType;
+  /** Alternatives: neighbour similarity 0–1 and the knowledge graph's check results. */
+  similarity?: number | null;
+  checks?: Record<string, string>;
+  lift?: number | null;
+  strong?: boolean;
 }
 export interface GraphData {
   nodes: GraphNode[];
