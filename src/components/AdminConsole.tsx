@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { PartdataStatus } from "@/components/PartdataStatus";
 import { useRouter } from "next/navigation";
 import { DAILY_TARGET, taxName, TAXONOMY } from "@/lib/taxonomy";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
@@ -71,6 +72,8 @@ function Dashboard({ stats, inbox, analytics, contentStats }: { stats: Stats; in
         <Stat k="Scheduled" v={String(stats.scheduled)} c="#7a5cff" />
         <Stat k="Broken links" v={String(stats.brokenLinks)} c="#d8506a" />
       </div>
+      <PartdataStatus />
+      <div style={{ height: 16 }} />
       <AnalyticsPanel rows={analytics || []} />
       {contentStats && <ContentStatsPanel readsByDay={contentStats.readsByDay || []} articles={contentStats.articleReads || []} resources={contentStats.resourceClicks || []} dailyReads={contentStats.dailyReads || []} />}
       <div style={{ background: "#fff", border: "1px solid #e3e9eb", borderRadius: 8, padding: 18 }}>
