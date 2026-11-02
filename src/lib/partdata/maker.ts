@@ -313,6 +313,34 @@ function nodeOf(id: string, label: string, manufacturer: string | null, kind: st
  */
 const MODULE_MIN_ICS = 8;
 
+/** Catalogue entry for a family's representative part number: exact MPN first, else the first prefix match. */
+async function catalogueEntry(label: string, visitor: string): Promise<{ manufacturer: string; description: string } | null> {
+  const key = norm(label);
+  if (key.length < 3) return null;
+  try {
+    const r = await pdGet(`${P}/parts/search`, { q: label, limit: 5 }, visitor);
+    const rows: any[] = r.data.items || [];
+    const hit = rows.find((x) => norm(x.mpn) === key) || rows.find((x) => norm(x.mpn).startsWith(key));
+    if (!hit) return null;
+    const p = toPart(hit);
+    return { manufacturer: p.manufacturer, description: p.description };
+  } catch {
+    return null;
+  }
+}
+/**
+ * Families tagged "ic" from their U designator that are not chips: display / sensor boards and
+ * other modules ("ST7789_1.54_240x240", "SSD1306 OLED module"), or a library symbol name rather
+ * than a part number (no manufacturer and an underscore).
+ */
+const MODULE_WORDS = /\b(lcd|oled|tft|e-?paper|e-?ink|display|screen|module|breakout|board|shield|header|connector)\b/i;
+function notAChip(f: { label?: string; family?: string; manufacturer?: string | null }) {
+  const label = String(f.label || f.family || "");
+  if (MODULE_WORDS.test(label.replace(/[_-]/g, " "))) return true;
+  if (/\d+\s*[x×]\s*\d+/i.test(label) && /\d\.\d/.test(label)) return true; // 1.54" 240x240 panels
+  return !String(f.manufacturer || "").trim() && label.includes("_");
+}
+
 export async function kgGraph(focus: string, visitor: string, module = ""): Promise<GraphData> {
   const snap = await pdGet(`${KG}/snapshots/current`, {}, visitor);
   const N = Number(snap.data.designs) || 0;
@@ -344,7 +372,7 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
   };
   let matched = "";
   let eligible = 0;
-  let moduleScope: { id: string; designs: number; items: { family: string; label: string; manufacturer: string; count: number }[] } | null = null;
+  let moduleScope: { id: string; designs: number; items: { family: string; label: string; manufacturer: string; description: string; count: number }[] } | null = null;
   if (module) {
     // Circuit-module view: the families used most by designs classified into this module
     // (with its sub-modules), and how those families co-occur with each other.
@@ -352,24 +380,30 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
     // nothing about the module. Show ICs; only when a module has few, add discretes / crystals. Never passives.
     const rank = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(module)}/families`, { limit: 200 }, visitor);
     const all: any[] = rank.data.items || [];
-    const ics = all.filter((f) => f.kind === "ic");
+    const ics = all.filter((f) => f.kind === "ic" && !notAChip(f));
     const fill = all.filter((f) => f.kind === "discrete" || f.kind === "crystal");
     const items = [...ics.slice(0, 20), ...(ics.length < MODULE_MIN_ICS ? fill.slice(0, MODULE_MIN_ICS - ics.length) : [])];
     for (const f of items) add(node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));
+    eligible = ics.length + (ics.length < MODULE_MIN_ICS ? fill.length : 0);
+    // Neighbourhoods for the edges, and each ranked part's catalogue entry (manufacturer + description;
+    // the knowledge graph often has no manufacturer). Both are cached by the partdata client.
+    const [hoods, catalogue] = await Promise.all([
+      Promise.allSettled(
+        nodes.slice(0, 12).map((n) => pdGet(`${KG}/neighborhood`, { entity_id: `fam:${n.id}`, limit: 80, sort: "n" }, visitor)),
+      ),
+      Promise.all(items.map((f: any) => catalogueEntry(String(f.label || f.family), visitor))),
+    ]);
     moduleScope = {
       id: module,
       designs: Number(rank.meta?.denominator_count) || 0,
-      items: items.map((f: any) => ({
+      items: items.map((f: any, i: number) => ({
         family: f.family,
         label: f.label || f.family,
-        manufacturer: manufacturerEn(f.manufacturer || ""),
+        manufacturer: manufacturerEn(f.manufacturer || "") || catalogue[i]?.manufacturer || "",
+        description: catalogue[i]?.description || "",
         count: Number(f.adoption_count) || 0,
       })),
     };
-    eligible = ics.length + (ics.length < MODULE_MIN_ICS ? fill.length : 0);
-    const hoods = await Promise.allSettled(
-      nodes.slice(0, 12).map((n) => pdGet(`${KG}/neighborhood`, { entity_id: `fam:${n.id}`, limit: 80, sort: "n" }, visitor)),
-    );
     for (const h of hoods) if (h.status === "fulfilled") addEdges(h.value.data);
   } else if (focus) {
     const fam = await resolveFamily(focus, visitor);

@@ -18,7 +18,10 @@ const P = (id: string, mpn: string, mfr = "意法半导体") => ({
 });
 const routes: Record<string, (c: Call) => unknown> = {
   "/api/pub/v1/parts/lookup": (c) => ({ data: { match: c.url.searchParams.get("mpn") === "STM32F103C8T6" ? "exact" : "none", items: c.url.searchParams.get("mpn") === "STM32F103C8T6" ? [P("p_aaaaaaaaaa", "STM32F103C8T6")] : [] }, meta: {} }),
-  "/api/pub/v1/parts/search": () => ({ data: { items: [P("p_aaaaaaaaaa", "STM32F103C8T6"), P("p_bbbbbbbbbb", "STM32F103CBT6")] }, meta: { pagination: { has_more: false } } }),
+  "/api/pub/v1/parts/search": (c) =>
+    c.url.searchParams.get("q") === "RP2040"
+      ? { data: { items: [{ ...P("p_rprprprprp", "RP2040", "树莓派"), description_en: "Dual-core Arm Cortex-M0+ MCU" }] }, meta: {} }
+      : { data: { items: [P("p_aaaaaaaaaa", "STM32F103C8T6"), P("p_bbbbbbbbbb", "STM32F103CBT6")] }, meta: { pagination: { has_more: false } } },
   "/api/pub/v1/designs": (c) => ({
     data: {
       items: [
@@ -41,7 +44,9 @@ const routes: Record<string, (c: Call) => unknown> = {
   "/api/kg/v1/snapshots/current": () => ({ data: { snapshot_id: 1, designs: 40 }, meta: { computed_at: "2026-11-01T00:00:00Z" } }),
   "/api/kg/v1/rankings/functions/mcu/families": () => ({
     data: { items: [{ family: "CRCW060310K0", label: "CRCW060310K0FKEA", manufacturer: "Vishay", kind: "passive", adoption_count: 15 },
-      { family: "RP2040", label: "RP2040", manufacturer: "树莓派", kind: "ic", adoption_count: 12 }, { family: "BSS138", label: "BSS138", manufacturer: "onsemi", kind: "discrete", adoption_count: 10 },
+      { family: "RP2040", label: "RP2040", manufacturer: null, kind: "ic", adoption_count: 12 }, { family: "BSS138", label: "BSS138", manufacturer: "onsemi", kind: "discrete", adoption_count: 10 },
+      { family: "ST7789154240X240", label: "ST7789_1.54_240x240", manufacturer: null, kind: "ic", adoption_count: 9 },
+      { family: "SSD1306", label: "SSD1306 OLED module", manufacturer: "Solomon Systech", kind: "ic", adoption_count: 9 },
       { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", kind: "ic", adoption_count: 9 }] },
     meta: { denominator_count: 20, pagination: { total: 2 } },
   }),
@@ -125,12 +130,12 @@ async function main() {
   const { GET: graphGet } = await import("../src/app/api/maker/graph/route");
   r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=mcu", { headers: { "x-forwarded-for": "203.0.113.9" } }));
   d = await r.json();
-  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128", "BSS138"], "ICs first, passives never; discretes only fill a module with few ICs");
+  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128", "BSS138"], "ICs first, passives and display modules never; discretes only fill a module with few ICs");
   assert.equal(d.edges.length, 1);
   assert.deepEqual(d.scope.module, { id: "mcu", designs: 20, items: [
-    { family: "RP2040", label: "RP2040", manufacturer: "Raspberry Pi", count: 12 },
-    { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", count: 9 },
-    { family: "BSS138", label: "BSS138", manufacturer: "onsemi", count: 10 },
+    { family: "RP2040", label: "RP2040", manufacturer: "Raspberry Pi", description: "Dual-core Arm Cortex-M0+ MCU", count: 12 },
+    { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", description: "", count: 9 },
+    { family: "BSS138", label: "BSS138", manufacturer: "onsemi", description: "", count: 10 },
   ] });
   // one visitor action = one call attributed to the visitor; the fan-out counts only toward the key
   const graphCalls = calls.filter((c) => c.url.pathname.startsWith("/api/kg/v1/"));

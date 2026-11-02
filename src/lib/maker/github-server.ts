@@ -38,18 +38,40 @@ function headers() {
       : {}),
   };
 }
+/**
+ * GitHub API GET. Renamed or transferred repositories (mossmann/hackrf → greatscottgadgets/hackrf)
+ * answer with a redirect; it is followed only within the API origin, at most 3 times.
+ */
 async function github(path: string) {
-  let r: Response;
-  try {
-    r = await fetch(GITHUB_API + path, {
-      headers: headers(),
-      redirect: "error",
-      signal: AbortSignal.timeout(20000),
-      cache: "no-store",
-    });
-  } catch {
-    throw new SourceError("GitHub is unreachable from this server.", 502);
+  const origin = new URL(GITHUB_API).origin;
+  let url = GITHUB_API + path;
+  let r: Response | null = null;
+  for (let hop = 0; hop < 4; hop++) {
+    try {
+      r = await fetch(url, {
+        headers: headers(),
+        redirect: "manual",
+        signal: AbortSignal.timeout(30000),
+        cache: "no-store",
+      });
+    } catch (e) {
+      throw new SourceError(
+        e instanceof Error && e.name === "TimeoutError"
+          ? "GitHub took too long to respond. Please retry in a moment."
+          : "GitHub is unreachable from this server.",
+        502,
+      );
+    }
+    if (![301, 302, 307, 308].includes(r.status)) break;
+    let next: URL | null = null;
+    try {
+      next = new URL(r.headers.get("location") || "", url);
+    } catch {}
+    if (!next || next.origin !== origin) throw new SourceError("GitHub redirected to an unexpected address.", 502);
+    url = next.href;
+    r = null;
   }
+  if (!r) throw new SourceError("GitHub redirected too many times.", 502);
   if (!r.ok)
     throw new SourceError(
       r.status === 403 || r.status === 429
@@ -150,8 +172,10 @@ export function scanGithub(url: string) {
 }
 async function scanFresh(url: string) {
   const parsed = parseGithubUrl(url);
+  const repo = await github("/repos/" + parsed.repo);
+  // A renamed / transferred repository: continue (and build raw file URLs) under its current name.
+  if (typeof repo.full_name === "string" && /^[\w.-]+\/[\w.-]+$/.test(repo.full_name)) parsed.repo = repo.full_name;
   const base = "/repos/" + parsed.repo;
-  const repo = await github(base);
   if (repo.private)
     throw new SourceError(
       "Only public repositories can be imported without signing in.",
