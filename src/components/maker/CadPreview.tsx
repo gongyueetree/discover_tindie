@@ -1,507 +1,114 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { AssemblyScene } from "@/vendor/canon/components/AssemblyScene";
-import type { InputAsset } from "@/vendor/canon/lib/eda/types";
-type Shape = {
-  points: number[][];
-  closed?: boolean;
-  filled?: boolean;
-  width?: number;
-  layer?: string;
+/**
+ * A part's symbol, footprint and 3D model side by side — the layout of eelib's EcadPanel
+ * (eelib-web/components/ecad/EcadPanel.tsx): three cells, each with its drawing (or a dashed
+ * box saying why there is none), the file name and a download link; symbol and footprint
+ * linked by pin number. Drawings come from the official KiCad library entry the parts
+ * database names, drawn by eelib's preview engine on the server.
+ */
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Download } from "lucide-react";
+import { FootprintDrawing, SymbolDrawing } from "./ecad/Drawings";
+import { PinLinkProvider, PinStatus, UnitPicker, type FootprintPreview, type SymbolPreview } from "./ecad/PinLink";
+import { StepViewer } from "./ecad/StepViewer";
+
+type Side<T> = { preview?: T | null; reason?: string; source?: string; library?: string };
+type Cad = {
+  symbol?: Side<SymbolPreview>;
+  footprint?: Side<FootprintPreview>;
+  model?: { path: string; revision: string } | null;
+  revision?: string;
 };
-type Pin = {
-  x: number;
-  y: number;
-  angle: number;
-  length: number;
-  name: string;
-  number: string;
-  type?: string;
-  nameSize?: number;
-  numberSize?: number;
-  nameOffset?: number;
-  showName?: boolean;
-  showNumber?: boolean;
-  hideName?: boolean;
-  hideNumber?: boolean;
-};
-type Pad = {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  angle: number;
-  shape: string;
-  number: string;
-  through?: boolean;
-};
-type Preview = {
-  kind: string;
-  name: string;
-  shapes?: Shape[];
-  pins?: Pin[];
-  pads?: Pad[];
-  parts?: { unit: number; shapes: Shape[]; pins: Pin[] }[];
-};
-function Drawing({
-  data,
-  selectedPin,
-  onPin,
-}: {
-  data: Preview;
-  selectedPin: string;
-  onPin: (pin: string) => void;
-}) {
-  const [unit, setUnit] = useState(0),
-    [zoom, setZoom] = useState(1),
-    [pan, setPan] = useState([0, 0]);
-  const drag = useRef<number[] | null>(null);
-  const svg = useRef<SVGSVGElement>(null);
-  useEffect(() => {
-    const index =
-      data.parts?.findIndex((p) =>
-        p.pins.some((pin) => pin.number === selectedPin),
-      ) ?? -1;
-    if (index >= 0) setUnit(index);
-  }, [data, selectedPin]);
-  const part = data.parts?.[unit] || data;
-  const shapes = part.shapes || [],
-    pins = part.pins || [],
-    pads = data.pads || [];
-  const pts = [
-    ...shapes.flatMap((s) => s.points),
-    ...pins.flatMap((p) => [
-      [p.x, p.y],
-      [
-        p.x + Math.cos((p.angle * Math.PI) / 180) * p.length,
-        p.y + Math.sin((p.angle * Math.PI) / 180) * p.length,
-      ],
-    ]),
-    ...pads.flatMap((p) => [
-      [p.x - Math.hypot(p.w, p.h) / 2, p.y - Math.hypot(p.w, p.h) / 2],
-      [p.x + Math.hypot(p.w, p.h) / 2, p.y + Math.hypot(p.w, p.h) / 2],
-    ]),
-  ].filter((p) => p.every(Number.isFinite));
-  if (!pts.length)
-    return <p className="notice">No drawable geometry was returned.</p>;
-  const minX = Math.min(...pts.map((p) => p[0])),
-    minY = Math.min(...pts.map((p) => p[1])),
-    maxX = Math.max(...pts.map((p) => p[0])),
-    maxY = Math.max(...pts.map((p) => p[1])),
-    size = Math.max(maxX - minX, maxY - minY, 1) * 1.25,
-    w = size / zoom,
-    x = (minX + maxX - w) / 2 + pan[0],
-    y = (minY + maxY - w) / 2 + pan[1];
-  return (
-    <>
-      <div className="cad-controls">
-        {data.parts && data.parts.length > 1 && (
-          <select
-            aria-label="Symbol unit"
-            value={unit}
-            onChange={(e) => {
-              setUnit(Number(e.target.value));
-              setZoom(1);
-              setPan([0, 0]);
-            }}
-          >
-            {data.parts.map((p, i) => (
-              <option key={p.unit} value={i}>
-                Unit {p.unit}
-              </option>
-            ))}
-          </select>
-        )}
-        <button
-          className="btn small"
-          aria-label="Zoom in CAD"
-          onClick={() => setZoom((z) => Math.min(16, z * 1.3))}
-        >
-          +
-        </button>
-        <button
-          className="btn small"
-          aria-label="Zoom out CAD"
-          onClick={() => setZoom((z) => Math.max(0.5, z / 1.3))}
-        >
-          −
-        </button>
-        <button
-          className="btn small"
-          onClick={() => {
-            setZoom(1);
-            setPan([0, 0]);
-          }}
-        >
-          Fit
-        </button>
-      </div>
-      <svg
-        ref={svg}
-        role="img"
-        aria-label={data.name + " interactive preview"}
-        viewBox={`${x} ${y} ${w} ${w}`}
-        style={{
-          width: "100%",
-          height: 300,
-          touchAction: "none",
-          cursor: "grab",
-        }}
-        onPointerDown={(e) => {
-          drag.current = [e.clientX, e.clientY, ...pan];
-          e.currentTarget.setPointerCapture(e.pointerId);
-        }}
-        onPointerMove={(e) => {
-          if (!drag.current) return;
-          const scale = w / Math.min(svg.current?.clientWidth || 300, 300);
-          setPan([
-            drag.current[2] - (e.clientX - drag.current[0]) * scale,
-            drag.current[3] - (e.clientY - drag.current[1]) * scale,
-          ]);
-        }}
-        onPointerUp={() => (drag.current = null)}
-        onPointerCancel={() => (drag.current = null)}
-      >
-        {shapes.map((s, i) => (
-          <path
-            key={"s" + i}
-            d={
-              s.points
-                .map((p, j) => `${j ? "L" : "M"}${p[0]},${p[1]}`)
-                .join(" ") + (s.closed ? " Z" : "")
-            }
-            fill={s.filled ? "#edf8f7" : "none"}
-            stroke={data.kind === "symbol" ? "#355361" : "#159aaf"}
-            strokeWidth={s.width || (data.kind === "symbol" ? 0.1524 : size * 0.002)}
-            
-          />
-        ))}
-        {pads.map((p, i) => (
-          <g
-            key={"p" + i}
-            role="button"
-            className="cad-pin-hit"
-            tabIndex={0}
-            aria-label={`Pad ${p.number}`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => {
-              if (p.number) onPin(p.number);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onPin(p.number);
-              }
-            }}
-            transform={`translate(${p.x} ${p.y}) rotate(${p.angle || 0})`}
-          >
-            <rect
-              x={-p.w / 2}
-              y={-p.h / 2}
-              width={p.w}
-              height={p.h}
-              rx={
-                /circle|oval/.test(p.shape)
-                  ? Math.min(p.w, p.h) / 2
-                  : /roundrect/.test(p.shape)
-                    ? Math.min(p.w, p.h) * 0.2
-                    : 0
-              }
-              fill={
-                selectedPin && selectedPin === p.number ? "#f29538" : "#1679c7"
-              }
-            />
-            <text
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={
-                Math.min(p.w / Math.max(p.number.length, 1), p.h) * 0.55
-              }
-              fill="white"
-            >
-              {p.number}
-            </text>
-          </g>
-        ))}
-        {pins.map((p, i) => {
-          const r = (p.angle * Math.PI) / 180,
-            ex = p.x + Math.cos(r) * p.length,
-            ey = p.y + Math.sin(r) * p.length;
-          const horizontal = Math.abs(Math.cos(r)) > 0.5;
-          const forward = horizontal ? Math.cos(r) > 0 : Math.sin(r) < 0;
-          const offset = p.nameOffset ?? 0.508;
-          const mx = (p.x + ex) / 2, my = (p.y + ey) / 2;
-          const nx = offset > 0 ? ex + Math.cos(r) * offset : mx - (horizontal ? 0 : 0.254);
-          const ny = offset > 0 ? ey + Math.sin(r) * offset : my - (horizontal ? 0.254 : 0);
-          const tx = mx - (horizontal ? 0 : 0.254), ty = my - (horizontal ? 0.254 : 0);
-          return (
-            <g
-              key={"pin" + i}
-              role="button"
-              className="cad-pin-hit"
-              tabIndex={0}
-              aria-label={`Pin ${p.number}: ${p.name}`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                if (p.number) onPin(p.number);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onPin(p.number);
-                }
-              }}
-            >
-              <line
-                x1={p.x}
-                y1={p.y}
-                x2={ex}
-                y2={ey}
-                stroke="transparent"
-                strokeWidth={size * 0.025}
-              />
-              <title>
-                {p.number}: {p.name} ({p.type})
-              </title>
-              <line
-                x1={p.x}
-                y1={p.y}
-                x2={ex}
-                y2={ey}
-                stroke={
-                  selectedPin && selectedPin === p.number
-                    ? "#f29538"
-                    : "#4075df"
-                }
-                strokeWidth={0.1524}
-              />
-              {!p.hideNumber && p.showNumber !== false && <text x={tx} y={ty}
-                transform={!horizontal ? `rotate(-90 ${tx} ${ty})` : undefined}
-                textAnchor="middle" fontSize={p.numberSize ?? 1.27}
-                fontFamily="Arial, sans-serif" fontWeight={400}
-                fill={selectedPin === p.number ? "#f29538" : "#445f6b"}>
-                {p.number}
-              </text>}
-              {!p.hideName && p.showName !== false && p.name !== "~" && <text x={nx} y={ny}
-                transform={!horizontal ? `rotate(-90 ${nx} ${ny})` : undefined}
-                textAnchor={offset > 0 ? (forward ? "start" : "end") : "middle"}
-                dominantBaseline={offset > 0 ? "central" : undefined}
-                fontSize={p.nameSize ?? 1.27} fontFamily="Arial, sans-serif" fontWeight={400}
-                fill={selectedPin === p.number ? "#f29538" : "#183b47"}>
-                {p.name}
-              </text>}
-            </g>
-          );
-        })}
-      </svg>
-      <small>{data.name} · drag to pan</small>
-    </>
-  );
-}
-type Side = { preview?: Preview | null; reason?: string; source?: string; library?: string };
 const REASON: Record<string, string> = {
-  no_symbol_in_database: "No symbol recorded for this part",
-  no_footprint_in_database: "No footprint recorded for this part",
-  not_in_official_kicad_library: "Not in the official KiCad library",
-  not_previewable: "Library file could not be drawn",
+  no_symbol_in_database: "No symbol is recorded for this part.",
+  no_footprint_in_database: "No footprint is recorded for this part.",
+  not_in_official_kicad_library: "Not in the official KiCad library.",
+  not_previewable: "This file could not be drawn.",
+  no_model: "The footprint references no 3D model.",
 };
+
 export default function CadPreview({ partId, mpn }: { partId: string; mpn: string }) {
-  const [selectedPin, setSelectedPin] = useState("");
-  useEffect(() => setSelectedPin(""), [partId]);
-  const [data, setData] = useState<{
-      symbol?: Side;
-      footprint?: Side;
-      model?: { path: string; revision: string } | null;
-      revision?: string;
-    } | null>(null),
-    [error, setError] = useState(""),
-    [model, setModel] = useState<InputAsset | null>(null),
-    [modelNote, setModelNote] = useState(""),
-    [busy, setBusy] = useState(false);
-  const controller = useRef<AbortController | null>(null);
+  const [data, setData] = useState<Cad | null>(null),
+    [error, setError] = useState("");
   useEffect(() => {
     setData(null);
     setError("");
-    setModel(null);
-    setModelNote("");
-    setBusy(false);
     const ac = new AbortController();
     fetch("/api/maker/cad/" + encodeURIComponent(partId), { signal: ac.signal })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok) throw Error(d.error);
-        if (!ac.signal.aborted) setData(d);
+        setData(d);
       })
-      .catch((e) => {
-        if (!ac.signal.aborted) setError(e.message);
-      });
-    return () => {
-      ac.abort();
-      controller.current?.abort();
-    };
+      .catch((e) => !ac.signal.aborted && setError(e.message));
+    return () => ac.abort();
   }, [partId]);
-  async function loadModel() {
-    if (!data?.model) return;
-    const ac = new AbortController();
-    controller.current = ac;
-    setBusy(true);
-    setModelNote("Loading the official KiCad 3D model…");
-    try {
-      const r = await fetch(
-        "/api/models/kicad?" + new URLSearchParams({ path: data.model.path, revision: data.model.revision }),
-        { signal: ac.signal },
-      );
-      if (!r.ok) throw Error(r.status === 404 ? "The KiCad library has no 3D model for this footprint." : "3D model unavailable right now.");
-      const bytes = new Uint8Array(await r.arrayBuffer());
-      if (!ac.signal.aborted) {
-        setModel({ path: data.model.path.split("/").pop() || mpn + ".step", bytes });
-        setModelNote("");
-      }
-    } catch (e) {
-      if (!ac.signal.aborted) setModelNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (!ac.signal.aborted) setBusy(false);
-    }
-  }
-  const symbol = data?.symbol?.preview,
-    footprint = data?.footprint?.preview;
-  const pins = symbol?.parts?.flatMap((p) => p.pins) || symbol?.pins || [],
-    pads = footprint?.pads || [];
-  const pinIds = new Set(pins.map((p) => p.number)),
-    padIds = new Set(pads.map((p) => p.number).filter(Boolean));
-  const mismatch =
-    pinIds.size &&
-    padIds.size &&
-    ([...pinIds].some((p) => !padIds.has(p)) ||
-      [...padIds].some((p) => !pinIds.has(p)));
+
+  const modelPath = data?.model?.path || "";
+  const loadModel = useCallback(async () => {
+    const r = await fetch("/api/models/kicad?" + new URLSearchParams({ path: modelPath, revision: data?.model?.revision || "master" }));
+    if (!r.ok) throw Error("model");
+    return r.arrayBuffer();
+  }, [modelPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (error) return <p className="notice">CAD preview unavailable: {error}</p>;
   if (!data) return <p className="muted">Loading symbol and footprint…</p>;
-  if (!symbol && !footprint)
-    return (
-      <p className="notice">
-        No CAD preview: {REASON[data.symbol?.reason || ""] || "no symbol"}; {REASON[data.footprint?.reason || ""]?.toLowerCase() || "no footprint"}.
-      </p>
-    );
-  return (
-    <section id="component-cad" className="cad-preview">
-      <div className="section-top">
-        <h2>CAD preview</h2>
-        {selectedPin && (
-          <span role="status">Selected pin / pad: {selectedPin}</span>
-        )}
-        <span>
-          {symbol ? "Symbol · " : ""}
-          {footprint ? "Footprint · " : ""}3D
-        </span>
-      </div>
-      <div
-        className="cad-grid"
-        style={{
-          gridTemplateColumns: `repeat(${1 + Number(!!symbol) + Number(!!footprint)}, minmax(0,1fr))`,
-        }}
-      >
-        {symbol && (
-          <article>
-            <h3>Schematic symbol</h3>
-            <Drawing
-              data={symbol}
-              selectedPin={selectedPin}
-              onPin={setSelectedPin}
-            />
-          </article>
-        )}
-        {footprint && (
-          <article>
-            <h3>PCB footprint</h3>
-            <Drawing
-              data={footprint}
-              selectedPin={selectedPin}
-              onPin={setSelectedPin}
-            />
-          </article>
-        )}
-        <article>
-          <h3>3D model</h3>
-          {model ? (
-            <AssemblyScene asset={model} library />
-          ) : (
-            <div className="cad-model-empty">
-              {data.model ? (
-                <>
-                  <p>Official KiCad STEP model for this footprint.</p>
-                  <button className="btn" onClick={() => void loadModel()} disabled={busy}>
-                    {busy ? "Loading…" : "Load 3D preview"}
-                  </button>
-                </>
-              ) : (
-                <p>No 3D model is referenced by this footprint.</p>
-              )}
-              <p>{modelNote}</p>
-            </div>
-          )}
-        </article>
-      </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-        {[data.symbol?.library, data.footprint?.library].filter(Boolean).join(" · ")} — official KiCad {data.revision} libraries,
-        drawn with the eelib CAD preview engine.
-        {!symbol && data.symbol?.reason ? ` Symbol: ${REASON[data.symbol.reason] || data.symbol.reason}.` : ""}
-        {!footprint && data.footprint?.reason ? ` Footprint: ${REASON[data.footprint.reason] || data.footprint.reason}.` : ""}
-      </p>
-      {!!mismatch && (
-        <p className="notice">
-          Symbol pin numbers and footprint pad numbers differ. Verify the CAD
-          variant before use.
-        </p>
-      )}
-      <details>
-        <summary>
-          Pin and pad details · {pinIds.size} pins / {padIds.size} numbered pads
-        </summary>
-        <div className="cad-pin-tables">
-          {symbol && (
-            <table>
-              <thead>
-                <tr>
-                  <th>Pin</th>
-                  <th>Name</th>
-                  <th>Type</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pins.map((p, i) => (
-                  <tr key={i}>
-                    <td>{p.number}</td>
-                    <td>{p.name}</td>
-                    <td>{p.type || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <table>
-            <thead>
-              <tr>
-                <th>Pad</th>
-                <th>Shape</th>
-                <th>Size (mm)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pads
-                .filter((p) => p.number)
-                .map((p, i) => (
-                  <tr key={i}>
-                    <td>{p.number}</td>
-                    <td>{p.shape}</td>
-                    <td>
-                      {p.w} × {p.h}
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+  const symbol = data.symbol?.preview ?? null;
+  const footprint = data.footprint?.preview ?? null;
+  const modelName = modelPath.split("/").pop() || "";
+
+  const cell = (title: string, name: string | undefined, download: string | undefined, body: ReactNode) => (
+    <section className="ecad-cell">
+      <h3>{title}</h3>
+      {body}
+      {name ? <p className="ecad-name" title={name}>{name}</p> : null}
+      {download ? (
+        <a className="ecad-download" href={download} target="_blank" rel="noreferrer">
+          <Download size={13} aria-hidden /> Download
+        </a>
+      ) : null}
     </section>
+  );
+  const empty = (reason?: string) => <div className="ecad-empty">{REASON[reason || ""] || "None in this part's files."}</div>;
+
+  return (
+    <PinLinkProvider symbol={symbol}>
+      <div className="ecad-panel" id="component-cad">
+        <div className="ecad-grid">
+          {cell(
+            "Symbol",
+            data.symbol?.library,
+            data.symbol?.source,
+            symbol ? (
+              <>
+                <SymbolDrawing symbol={symbol} label={`Symbol ${symbol.name}`} />
+                {symbol.namesHiddenInFile ? (
+                  <p className="ecad-status ecad-warn">This symbol file hides its pin names; they are shown here so the pins can be checked.</p>
+                ) : null}
+                <UnitPicker symbol={symbol} />
+              </>
+            ) : (
+              empty(data.symbol?.reason)
+            ),
+          )}
+          {cell(
+            "Footprint",
+            data.footprint?.library,
+            data.footprint?.source,
+            footprint ? <FootprintDrawing footprint={footprint} label={`Footprint ${footprint.name}`} /> : empty(data.footprint?.reason),
+          )}
+          {cell(
+            "3D model",
+            modelName,
+            undefined,
+            data.model ? <StepViewer key={modelPath} load={loadModel} label={`3D model ${modelName}`} /> : empty(footprint ? "no_model" : data.footprint?.reason),
+          )}
+        </div>
+        <PinStatus symbol={symbol} footprint={footprint} />
+        <p className="ecad-source">
+          Official KiCad {data.revision} libraries · scroll to zoom, drag to pan · {mpn}
+        </p>
+      </div>
+    </PinLinkProvider>
   );
 }

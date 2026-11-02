@@ -15,7 +15,7 @@
 |---|---|---|---|
 | **Resources**（默认） | `/`（`/embed` 相同） | 原 Discover 页面，原样保留：每日硬件发现、博客、资源目录、推荐横幅、收藏 | 原 Postgres 数据库 + 原后台 `/admin` |
 | **Components** | `/tools/components` | 型号搜索 → 详情（分类、生命周期、参数及来源、数据手册）→ 符号/封装/3D 预览 → 使用该器件的开源设计 → 加入 PCB planner；"View related components" 打开知识图谱 | partdata `parts/*`、`designs?part=`；符号/封装取 KiCad 官方库，用 eelib 的 CAD 预览引擎绘制；3D 用 KiCad 官方 STEP |
-| **Open hardware** | `/tools/circuits` | 按常用器件族浏览开源设计（知识图谱排名），或按型号查找；打开设计 → 原理图 / PCB / 3D / BOM / iBOM / 文件下载；也可打开自己的文件或导入 GitHub 工程 | partdata `designs/*` + KG 排名；工程文件从 GitHub 按**固定提交**拉取，在浏览器里用 eelib/canon 引擎解析 |
+| **Open hardware** | `/tools/circuits` | 按电路模块分类浏览开源设计，或按型号查找；打开设计 → 原理图 / PCB / 3D / BOM / iBOM / 文件下载；也可打开自己的文件或导入 GitHub 工程 | partdata `designs/*` + 电路模块分类；工程文件从 GitHub 按**固定提交**拉取，在浏览器里用 eelib/canon 引擎解析 |
 | **PCB planner** | `/tools/planner` | 手动摆放封装、板框检查、2D/3D、BOM 估价、导出 KiCad | 封装：partdata 记录的封装名 → KiCad 官方库；protopcb 几何引擎 |
 
 旧路径兼容：`/discover`、`/tools/resources` → `/`；`/tools/viewer` → `/tools/circuits`。
@@ -39,9 +39,9 @@
 - partdata 的质量规则原样遵守：只显示它输出的字段；`withheld` 的字段明确提示"有冲突未输出"；BOM 匹配 `ambiguous` / `candidates` 一律让用户确认，不自动替换；厂商参考设计不显示 BOM，只给来源链接；替代候选标明"未核对引脚/封装/电气"。
 - 中文分类、厂商名在页面上显示英文（`src/lib/partdata/glossary.ts`：完整 ezPLM 分类树对照表 + partdata `config/mfr_lineage.yaml` 的规范厂商名），原始值不改。
 
-### 为什么"Open hardware"不是一个全量列表
+### 为什么"Open hardware"按模块 / 型号进入
 
-partdata 出于防爬设计**没有"列出全部设计"的接口**（只能按物料 / 型号 / 器件族查，每次最多看前 100 条）。所以这个 TAB 以知识图谱里最常用的器件族作为浏览入口（默认选中第一个），再加上按型号查找。
+partdata 出于防爬设计**没有"列出全部设计"的接口**（只能按物料 / 型号 / 器件族查，每次最多看前 100 条）。所以这个 TAB 以电路模块分类作为浏览入口（默认"嵌入式处理"），再加上按型号查找。
 
 ---
 
@@ -131,7 +131,42 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 
 ---
 
-## 7. 已知限制 / 需要 partdata 侧配合
+## 7. 第二轮调整（按测试反馈）
+
+**界面参照 eelib 已验证的实现**（保留 Tindie 的配色、字体和外框）
+- 元器件 CAD 预览：采用 eelib `EcadPanel` 布局（符号 / 封装 / 3D 三格，每格下方是文件名和下载；管脚与焊盘按编号联动高亮；多单元符号可切换单元）。符号和封装支持**鼠标滚轮缩放、拖动平移**（缩放方式与 eelib 原理图查看器相同）。3D 用 eelib 的 `StepViewer`，固定在框内，不再显示"Solid model loaded…"。
+- Open hardware：采用 eelib CircuitAtlas 布局（搜索框 + Designs / Circuit modules 两个视图），按 partdata 的**电路模块分类**浏览：顶层模块标签 + 子模块下拉；模块视图是分类树卡片。卡片样式同 eelib `DesignCard`。174 个模块名的英文对照在 `src/lib/partdata/modules.ts`。
+- PCB planner 器件列表：每项显示型号 · 厂商、两行简介、封装和分类；**只列出有封装且封装在 KiCad 官方库里的器件**。
+
+**设计列表规则**（元器件页"使用该器件的设计"、Open hardware、图谱里的设计都适用）
+- 只显示有完整工程文件、浏览器能打开的设计：KiCad、EAGLE、Altium、EasyEDA / JLCEDA。
+- 至少 1 颗 GitHub 星。厂商参考设计没有星数，不再列出。
+
+**CAD 格式**
+- 解析引擎换成 eelib 最新版本（refir / canon-eda-ir **1.7.2**）。原型里带的是较旧的版本。
+- 原理图按源文件绘制，用的是 eelib 的 `drawSchematics`：
+  - KiCad：支持层次图，KiCad 5 的 `.sch` + `-cache.lib` 会自动转换（修复了只显示管脚、不显示符号的问题）。
+  - Altium：带网络。
+  - EAGLE：按源文件绘制。
+  - EasyEDA / JLCEDA：原理图按解析结果显示，每个器件是一个带管脚的方框（解析器不提供符号原图）；PCB 和 3D 完整。
+- 上传和 GitHub 导入处都列出了支持的格式。
+- GitHub 导入只抓所选 PCB 工程的文件：原理图各页、PCB、工程文件、工程里引用的本地符号 / 封装库和 3D 模型、许可证。固件、文档、其他板子、备份和 Git 历史都不抓。新增识别 Altium（`.PrjPcb` 及其列出的文档）、EasyEDA 导出的 JSON、JLCEDA Pro（`.epro` 等）。
+- `npm test` 新增两组检查：`cad-format-checks`（用 eelib 自带的测试工程跑 KiCad / EAGLE / Altium / EasyEDA / JLCEDA Pro 的解析和绘制），`github-format-checks`（各格式的工程识别）。
+
+**需要 partdata 配合的部分**：`docs/partdata/0001-partner-filters.patch`
+- 这是给 ezplm_partdata 的补丁（含测试），需要你审核后在 partdata 仓库应用并部署。内容：
+  - `designs?function=<模块 id>`：按电路模块查设计，包含子模块。
+  - `min_stars`、`eda`：在分页**之前**过滤，所以数量准确。
+  - 物料列表带上 `footprint`；加 `with_footprint=1` 时只返回有封装的物料。
+- **没部署前页面也能用**：
+  - 按模块浏览会退而用该模块最常用的器件族找设计，并标注"近似"。
+  - 星数和格式在本站过滤：最多看每个条件的前 100 个设计。
+  - 规划器读前 12 个结果的详情，判断有没有封装。
+- **部署后**这些自动换成精确结果，不用改本站代码。
+- 应用方法：在 ezplm_partdata 仓库运行 `git am 0001-partner-filters.patch`。
+- partdata 现有测试里有一条（`openapi.json` 列出路由）在未打补丁的 main 上本来就失败，与本补丁无关。
+
+## 8. 已知限制 / 需要 partdata 侧配合
 
 - **设计数量**：partdata 只发布"解析成功、至少 5 个可识别器件、有明确许可"的设计。器件族的使用次数（知识图谱）因此会大于可打开的设计数，页面上已说明。
 - **数据手册**：partdata 不转发 ezPLM 内的 PDF，只告诉"有没有"；没有公开链接时页面显示 "Datasheet on file (not public)"。

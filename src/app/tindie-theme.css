@@ -405,3 +405,116 @@ dialog.maker { font-size: 14px; }
 .maker .viewer-workspace .tool-heading h1,
 .maker .project-viewer-modal .viewer-workspace .tool-heading h1 { font-size: 22px; }
 .maker .viewer-workspace .tool-heading p { font-size: 13.5px; }
+
+/* ---------------------------------------------------------------- CAD panel (eelib EcadPanel layout) */
+.maker .ecad-panel { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 18px; }
+.maker .ecad-grid { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .maker .ecad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .maker .ecad-grid { grid-template-columns: 1fr; } }
+.maker .ecad-cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.maker .ecad-cell h3 { font-size: 13.5px; font-weight: 600; color: var(--head); margin: 0; }
+.maker .ecad-canvas { position: relative; height: 256px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.maker .ecad-canvas svg { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.maker .ecad-canvas svg:active { cursor: grabbing; }
+.maker .ecad-zoom { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+.maker .ecad-zoom button {
+  width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.92); color: var(--ink); cursor: pointer;
+}
+.maker .ecad-zoom button:disabled { opacity: 0.4; cursor: default; }
+.maker .ecad-3d { position: relative; height: 256px; width: 100%; overflow: hidden; border-radius: 8px; background: #eef3f5; border: 1px solid var(--line); }
+.maker .ecad-3d canvas { display: block; }
+.maker .ecad-empty {
+  height: 256px; display: grid; place-items: center; padding: 0 16px; text-align: center;
+  border: 1px dashed #d6dee0; border-radius: 8px; font-size: 13px; color: var(--muted);
+}
+.maker .ecad-name { font-size: 12px; color: var(--muted-2); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maker .ecad-download { display: inline-flex; width: fit-content; align-items: center; gap: 4px; font-size: 13px; color: var(--tq-600); }
+.maker .ecad-download:hover { text-decoration: underline; }
+.maker .ecad-reset { display: inline-flex; width: fit-content; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); background: none; border: 0; cursor: pointer; }
+.maker .ecad-status { font-size: 12px; color: var(--muted-2); margin: 0; }
+.maker .ecad-warn { color: #b0532f; }
+.maker .ecad-source { font-size: 12px; color: var(--muted); margin: 0; }
+.maker .ecad-units { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.maker .ecad-units button { border: 1px solid var(--line); border-radius: 6px; padding: 1px 8px; background: #fff; cursor: pointer; font-family: inherit; }
+.maker .ecad-units button[aria-pressed="true"] { border-color: var(--tq); background: #effafb; color: var(--tq-dark); font-weight: 600; }
+/* In the narrow part-details column the three cells stack two-up. */
+.maker .candidate-panel .ecad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.maker .candidate-panel .ecad-cell:last-child { grid-column: 1 / -1; }
+
+/* ---------------------------------------------------------------- Open hardware (eelib CircuitAtlas layout) */
+.maker .atlas-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 4px 0 16px; overflow-x: auto; }
+.maker .atlas-tabs button {
+  margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; padding: 9px 14px;
+  font-family: inherit; font-size: 14px; color: var(--muted-2); cursor: pointer; white-space: nowrap;
+}
+.maker .atlas-tabs button.active { border-bottom-color: var(--tq); color: var(--head); font-weight: 600; }
+.maker .atlas-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px; scrollbar-width: thin; }
+.maker .atlas-chips .chip { flex: none; }
+.maker .atlas-sub { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted-2); margin-bottom: 12px; }
+.maker .atlas-sub select { padding: 7px 10px; min-width: 260px; }
+.maker .atlas-grid { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1150px) { .maker .atlas-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 860px) { .maker .atlas-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .maker .atlas-grid { grid-template-columns: 1fr; } }
+.maker .atlas-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
+.maker .atlas-card:hover { border-color: #cfe9ec; }
+.maker .atlas-card-pic { display: block; height: 128px; border: 0; border-bottom: 1px solid var(--line); background: var(--band); padding: 0; cursor: pointer; width: 100%; }
+.maker .atlas-card-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.maker .atlas-card-nopic { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.maker .atlas-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px; flex: 1; min-width: 0; }
+.maker .atlas-card-name {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left;
+  border: 0; background: none; padding: 0; font-family: inherit; font-size: 14px; font-weight: 600; color: var(--head); cursor: pointer;
+}
+.maker .atlas-card-name:hover { color: var(--tq-600); text-decoration: underline; }
+.maker .atlas-card-summary { font-size: 12.5px; color: var(--muted-2); margin: 3px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.maker .atlas-card-facts { display: flex; flex-wrap: wrap; gap: 4px; }
+.maker .atlas-card-facts span { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted-2); background: var(--soft); border-radius: 6px; padding: 1px 6px; }
+.maker .atlas-card-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.maker .atlas-card-actions { display: inline-flex; align-items: center; gap: 10px; }
+.maker .atlas-card-actions a { display: inline-flex; align-items: center; gap: 3px; color: var(--muted-2); }
+.maker .atlas-card-actions a:hover { color: var(--tq-600); }
+.maker .atlas-card-actions .text-link { font-size: 12.5px; }
+.maker .atlas-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed #d6dee0; border-radius: 12px; color: var(--muted); text-align: center; }
+.maker .atlas-empty b { color: var(--head); }
+.maker .atlas-modules { display: flex; flex-direction: column; gap: 10px; }
+.maker .atlas-module-grid { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1000px) { .maker .atlas-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .maker .atlas-module-grid { grid-template-columns: 1fr; } }
+.maker .atlas-module-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff; }
+.maker .atlas-module-card ul { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 2px; }
+.maker .atlas-module-card button { border: 0; background: none; padding: 1px 0; text-align: left; font-family: inherit; font-size: 13.5px; color: var(--muted-2); cursor: pointer; }
+.maker .atlas-module-card button:hover { color: var(--tq-600); }
+.maker .atlas-module-card small { color: var(--muted); font-size: 11.5px; }
+.maker .atlas-module-card .atlas-module-top { display: inline-flex; align-items: center; gap: 6px; font-size: 14.5px; font-weight: 600; color: var(--head); }
+.maker .atlas-module-top svg { color: var(--tq-600); }
+.maker .atlas-module-card .atlas-module-leaves { margin: 0 0 2px 12px; }
+.maker .atlas-module-leaves button { font-size: 12.5px; }
+
+/* ---------------------------------------------------------------- planner rail items (eelib protopcb rail) */
+.maker .planner-part.planner-part-rich { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; height: auto; white-space: normal; padding: 10px 12px; }
+.maker .planner-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; min-width: 0; }
+.maker .planner-part-head b { font-size: 13.5px; color: var(--head); }
+.maker .planner-part-head span { font-size: 12px; color: var(--muted); }
+.maker .planner-part-desc { font-size: 12px; color: var(--muted-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.maker .planner-part-tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
+.maker .planner-part-tags .pill { font-size: 10.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maker .planner-grid { grid-template-columns: 290px minmax(0, 1fr) 300px; }
+.maker .planner-library-results { max-height: 460px; }
+@media (max-width: 1150px) { .maker .planner-grid { grid-template-columns: 260px minmax(0, 1fr); } }
+@media (max-width: 700px) { .maker .planner-grid { grid-template-columns: 1fr; } }
+.maker .planner-part-tags .pill { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+
+/* ---------------------------------------------------------------- supported CAD formats */
+.maker .cad-formats { margin: 10px 0 4px; font-size: 13px; color: var(--muted-2); }
+.maker .cad-formats summary { cursor: pointer; color: var(--tq-600); font-weight: 600; width: fit-content; }
+.maker .cad-formats ul { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
+.maker .cad-formats li { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.maker .cad-formats li b { color: var(--head); font-weight: 600; min-width: 220px; }
+.maker .cad-formats p { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); max-width: 760px; }
+@media (max-width: 600px) {
+  .maker .atlas-sub { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+  .maker .atlas-sub select { min-width: 0; width: 100%; }
+  .maker .cad-formats li b { min-width: 0; }
+}

@@ -14,6 +14,8 @@ import {
   familyInfo,
   familyRanking,
   resolveFamily,
+  moduleTree,
+  plannerParts,
 } from "@/lib/partdata/maker";
 import type { BomRow } from "@/lib/maker/types";
 
@@ -115,11 +117,13 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       /* --------------------------------------------------------------- designs */
       result = await designsBy({ part: a }, Math.max(0, Number(q.get("offset")) || 0), visitor, 10);
     } else if (req.method === "GET" && head === "circuits" && path.length === 1) {
-      const offset = Math.max(0, Math.min(80, Number(q.get("offset")) || 0));
+      const offset = Math.max(0, Math.min(100, Number(q.get("offset")) || 0));
       const part = q.get("part") || "";
       const mpn = (q.get("mpn") || "").trim();
       const family = (q.get("family") || "").trim().toUpperCase();
-      if (part && PART_ID.test(part)) result = await designsBy({ part }, offset, visitor);
+      const mod = (q.get("module") || "").trim();
+      if (mod && /^[a-z0-9.]{2,40}$/.test(mod)) result = { ...(await designsBy({ function: mod }, offset, visitor)), module: mod };
+      else if (part && PART_ID.test(part)) result = await designsBy({ part }, offset, visitor);
       else if (family) result = { ...(await designsBy({ family }, offset, visitor)), family };
       else if (mpn) {
         // An MPN first matches designs that use exactly this part number; if none, its family.
@@ -132,6 +136,13 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "circuits" && path.length === 2 && DESIGN_ID.test(a)) {
       const design = await designDetail(a, visitor);
       result = { design, github: design.kind === "open_source" ? githubSource(design.sourceUrl) : null };
+    } else if (req.method === "GET" && head === "modules" && path.length === 1) {
+      result = { items: await moduleTree() };
+    } else if (req.method === "GET" && head === "planner-parts" && path.length === 1) {
+      const query = (q.get("q") || "").trim();
+      if (query.length < 2 || query.length > 120) throw new SourceError("Enter 2–120 characters.", 400);
+      const [items] = [await englishParts(await plannerParts(query, visitor))];
+      result = { items };
     } else if (req.method === "GET" && head === "families" && path.length === 1) {
       /* -------------------------------------------------------- knowledge graph */
       result = await familyRanking(

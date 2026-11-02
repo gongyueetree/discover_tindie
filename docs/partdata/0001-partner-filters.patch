@@ -1,0 +1,200 @@
+From 8ec717c27d66c8913013756f383d3613a901fb4b Mon Sep 17 00:00:00 2001
+From: gongyueetree <eelib0418@gmail.com>
+Date: Mon, 2 Nov 2026 05:31:22 +0000
+Subject: [PATCH] feat(pub_api): designs by circuit module, min_stars / eda
+ filters, footprint in part lists
+
+For Tindie Discover (Open hardware by module; only openable KiCad/Eagle designs with >=1 star;
+PCB planner lists only parts that have a footprint).
+
+- GET /api/pub/v1/designs?function=<module id> (includes sub-modules, via oshw_bom_modules)
+- min_stars, eda (comma separated) filters applied before paging, so totals stay correct
+- parts/search and parts/lookup items carry footprint (withheld when it has a pending conflict);
+  with_footprint=1 returns only parts with a footprint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018MWFKK7DmS3uJmhqWTQfJ4
+---
+ ezplm_pilot/pub_api.py | 69 ++++++++++++++++++++++++++++++++++++------
+ tests/test_pub_api.py  | 39 ++++++++++++++++++++++++
+ 2 files changed, 98 insertions(+), 10 deletions(-)
+
+diff --git a/ezplm_pilot/pub_api.py b/ezplm_pilot/pub_api.py
+index 462918e..affe96f 100644
+--- a/ezplm_pilot/pub_api.py
++++ b/ezplm_pilot/pub_api.py
+@@ -25,7 +25,7 @@ from urllib.parse import quote
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Request
+ from fastapi.responses import JSONResponse
+-from sqlalchemy import func, or_, select
++from sqlalchemy import and_, func, or_, select
+ 
+ from .ihs import norm_mpn
+ from .staging import OshwBom, OshwItem, OshwMatch, PartnerKey, PubId, PubUsage, RepoStat, StagedPart, StagedProposal
+@@ -259,6 +259,35 @@ def _field(orig, new):
+     return None
+ 
+ 
++def _disputed(db, part_ids: list[str]) -> dict[str, set]:
++    """有未决冲突（flag_mismatch 待复核）的字段：这些字段不对外。"""
++    out: dict[str, set] = defaultdict(set)
++    for i in range(0, len(part_ids), 500):
++        for pid, f in db.execute(select(StagedProposal.part_id, StagedProposal.field).where(
++                StagedProposal.part_id.in_(part_ids[i:i + 500]), StagedProposal.action == "flag_mismatch", StagedProposal.review_status == "pending")):
++            out[pid].add(f)
++    return out
++
++
++def _summary_footprint(sp: StagedPart, disputed: set) -> str | None:
++    """列表里的封装名（只给名字；有冲突时不给）。合作方据此判断能否放进 PCB 规划器。"""
++    return None if "footprint" in disputed else (sp.orig_footprint or sp.new_footprint or None)
++
++
++def _list_items(db, parts: list, with_footprint: bool = False) -> list[dict]:
++    disputed = _disputed(db, [p.id for p in parts])
++    out = []
++    for p in parts:
++        x = public_part(db, p)
++        if not x:
++            continue
++        x["footprint"] = _summary_footprint(p, disputed.get(p.id, set()))
++        if with_footprint and not x["footprint"]:
++            continue
++        out.append(x)
++    return out
++
++
+ def public_part(db, sp: StagedPart, full: bool = False) -> dict | None:
+     from .oshw_map import en_desc_bad
+     if not (sp.mpn and sp.manufacturer and (sp.orig_category_id or sp.new_category_id)):
+@@ -295,7 +324,7 @@ def _parts_by_norm(db, keys: list[str]) -> dict[str, list]:
+ 
+ 
+ @router.get("/parts/lookup")
+-async def parts_lookup(mpn: str, manufacturer: str = "", ctx: dict = Depends(partner)):
++async def parts_lookup(mpn: str, manufacturer: str = "", with_footprint: bool = False, ctx: dict = Depends(partner)):
+     """按完整型号精确查（规范化后相同）；给了厂商就只留同一家。"""
+     hdr = need(ctx, "parts:read")
+     db = ctx["db"]
+@@ -308,23 +337,27 @@ async def parts_lookup(mpn: str, manufacturer: str = "", ctx: dict = Depends(par
+         from .ihs import Lineage
+         lin = Lineage(db=db)
+         hits = [p for p in hits if same_maker(p.manufacturer, manufacturer, lin)]
+-    items = [x for x in (public_part(db, p) for p in hits[:10]) if x]
++    items = _list_items(db, hits[:10], with_footprint)
+     db.commit()
+     return reply({"query": {"mpn": mpn, "manufacturer": manufacturer or None}, "match": "exact" if items else "none", "items": items}, hdr)
+ 
+ 
+ @router.get("/parts/search")
+-async def parts_search(q: str, limit: int = 10, offset: int = 0, ctx: dict = Depends(partner)):
+-    """型号前缀搜索；每页 ≤20，最多翻到第 100 条（不提供全量遍历）。"""
++async def parts_search(q: str, limit: int = 10, offset: int = 0, with_footprint: bool = False, ctx: dict = Depends(partner)):
++    """型号前缀搜索；每页 ≤20，最多翻到第 100 条（不提供全量遍历）。with_footprint=1 只要有封装（且封装无未决冲突）的物料。"""
+     hdr = need(ctx, "parts:read")
+     db = ctx["db"]
+     k = norm_mpn(q)
+     if len(k) < SEARCH["min_chars"]:
+         _err("query_too_short", f"至少 {SEARCH['min_chars']} 个字符", 400)
+     limit, offset = max(1, min(limit, SEARCH["max_limit"])), max(0, min(offset, SEARCH["max_offset"]))
+-    rows = db.execute(select(StagedPart).where(StagedPart.mpn_norm.like(f"{k}%"), *gate_where())
++    where = [StagedPart.mpn_norm.like(f"{k}%"), *gate_where()]
++    if with_footprint:
++        where.append(or_(and_(StagedPart.orig_footprint.isnot(None), StagedPart.orig_footprint != ""),
++                         and_(StagedPart.new_footprint.isnot(None), StagedPart.new_footprint != "")))
++    rows = db.execute(select(StagedPart).where(*where)
+                       .order_by(StagedPart.value_score.desc().nullslast(), StagedPart.mpn_norm).offset(offset).limit(limit + 1)).scalars().all()
+-    items = [x for x in (public_part(db, p) for p in rows[:limit]) if x]
++    items = _list_items(db, rows[:limit], with_footprint)
+     db.commit()
+     return reply({"items": items}, hdr, pagination={"limit": limit, "offset": offset, "has_more": len(rows) > limit and offset + limit < SEARCH["max_offset"] + SEARCH["max_limit"]})
+ 
+@@ -435,8 +468,10 @@ def _design_rows(db, bids: list[str]) -> list[dict]:
+ 
+ 
+ @router.get("/designs")
+-async def designs(part: str = "", mpn: str = "", family: str = "", limit: int = 10, offset: int = 0, ctx: dict = Depends(partner)):
+-    """用到某个物料（part=对外 ID）/ 型号（mpn）/ 器件族（family）的参考设计。必须给其中一个。"""
++async def designs(part: str = "", mpn: str = "", family: str = "", function: str = "", min_stars: int = 0, eda: str = "",
++                  limit: int = 10, offset: int = 0, ctx: dict = Depends(partner)):
++    """用到某个物料（part=对外 ID）/ 型号（mpn）/ 器件族（family）/ 含某电路模块（function=模块 id，含子类）的参考设计。必须给其中一个。
++    可选过滤（在分页之前做）：min_stars 最少 GitHub 星数（厂商设计没有星数，min_stars≥1 时不出）；eda 工具，逗号分隔（如 kicad,eagle）。"""
+     hdr = need(ctx, "designs:read")
+     db = ctx["db"]
+     limit, offset = max(1, min(limit, SEARCH["max_limit"])), max(0, min(offset, SEARCH["max_offset"]))
+@@ -450,9 +485,23 @@ async def designs(part: str = "", mpn: str = "", family: str = "", limit: int =
+         snap = kg.current(db)
+         f = family.removeprefix("fam:")
+         bids = [d["design_id"] for d in kg.designs_of(db, snap, f, limit=500)[0]] if snap else []
++    elif function:
++        from .staging import ModuleCategory, OshwBomModule
++        f = function.strip()
++        ids = {f} | {m for (m,) in db.execute(select(ModuleCategory.id).where(ModuleCategory.id.like(f + ".%")))}
++        q = (select(OshwBom.bom_id).join(OshwBomModule, OshwBomModule.bom_id == OshwBom.bom_id)
++             .where(OshwBomModule.module_id.in_(ids), *design_where()))
++        if min_stars > 0:
++            q = q.where(OshwBom.stars >= min_stars)
++        bids = list(dict.fromkeys(b for (b,) in db.execute(q.order_by(OshwBom.stars.desc().nullslast()).limit(4000))))
+     else:
+-        _err("bad_request", "要给 part、mpn 或 family 其中一个（型号至少 3 个字符）", 400)
++        _err("bad_request", "要给 part、mpn、family 或 function 其中一个（型号至少 3 个字符）", 400)
+     rows = _design_rows(db, bids[:2000])
++    if min_stars > 0:
++        rows = [r for r in rows if (r["stars"] or 0) >= min_stars]
++    tools = {t.strip().lower() for t in eda.split(",") if t.strip()}
++    if tools:
++        rows = [r for r in rows if (r["eda_tool"] or "").lower() in tools]
+     db.commit()
+     return reply({"items": rows[offset:offset + limit]}, hdr, pagination={"limit": limit, "offset": offset, "total": min(len(rows), SEARCH["max_offset"] + SEARCH["max_limit"])})
+ 
+diff --git a/tests/test_pub_api.py b/tests/test_pub_api.py
+index 74a32f2..a99638c 100644
+--- a/tests/test_pub_api.py
++++ b/tests/test_pub_api.py
+@@ -131,3 +131,42 @@ def test_settings_test_output_survives_ampersand(client, monkeypatch):
+     monkeypatch.setattr(settings, "key_source", lambda: Key())
+     page = client.post("/settings/test").text
+     assert "pageSize=1" in page and "API Key 接口" in page and "hits" in page
++
++
++def test_partner_filters_function_stars_eda_footprint(client):
++    """Tindie: designs by circuit module (incl. sub-modules), min_stars / eda filters before paging; footprint in list items."""
++    from ezplm_pilot.staging import ModuleCategory, OshwBomModule
++    from ezplm_pilot.web import _new_session
++    db = _new_session()
++    _seed(db)
++    db.merge(ModuleCategory(id="pfx", name="电源", depth=0))
++    db.merge(ModuleCategory(id="pfx.ldo", parent="pfx", name="LDO", depth=1))
++    db.add(OshwBom(bom_id="pd-4", project_id="pd-4", project_name="Zero-star board", gh_repo="acme/zero", commit_="def5678", license="MIT",
++                   group_lead=True, parse_status="succeeded", stars=0, eda_tool="kicad"))
++    db.add(RepoStat(repo="acme/zero", stars=0, license="MIT"))
++    for i in range(6):
++        db.add(OshwItem(item_id=f"pd-4-{i}", bom_id="pd-4", value=f"PUBV{i}", key_norm=f"PUBV{i}0", designators=f"U{i}", quantity=1))
++    db.query(OshwBom).filter(OshwBom.bom_id == "pd-1").update({"eda_tool": "kicad"})
++    db.add_all([OshwBomModule(bom_id="pd-1", module_id="pfx.ldo", n_items=1), OshwBomModule(bom_id="pd-4", module_id="pfx", n_items=1),
++                OshwBomModule(bom_id="pd-3", module_id="pfx", n_items=1)])
++    db.commit()
++    pub_api.METER.reset()
++    kid, sec = pub_api.new_key(db, "tindie", list(pub_api.SCOPES))
++    names = lambda r: [x["name"] for x in r.json()["data"]["items"]]
++    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx"})
++    assert set(names(r)) == {"RS485 board", "Zero-star board", "TI design"}            # 子类 pfx.ldo 的设计也算
++    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "min_stars": "1"})
++    assert names(r) == ["RS485 board"] and r.json()["meta"]["pagination"]["total"] == 1   # 0 星、厂商设计（无星数）不出
++    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "eda": "kicad,eagle"})
++    assert set(names(r)) == {"RS485 board", "Zero-star board"}
++    assert call(client, kid, sec, "GET", "/api/pub/v1/designs", {}).status_code == 400
++    s = call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485"}).json()["data"]["items"]
++    by = {x["mpn"]: x for x in s}
++    assert by["PUBX485ECSA+"]["footprint"] is None                                      # 封装有未决冲突：列表里也不给
++    s = call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485", "with_footprint": "1"}).json()["data"]["items"]
++    assert s == []
++    db.query(OshwBomModule).filter(OshwBomModule.bom_id.in_(["pd-1", "pd-3", "pd-4"])).delete(synchronize_session=False)
++    db.query(ModuleCategory).filter(ModuleCategory.id.like("pfx%")).delete(synchronize_session=False)
++    db.commit()
++    _clean(db)
++    db.close()
+-- 
+2.43.0
+
