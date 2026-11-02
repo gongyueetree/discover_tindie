@@ -493,3 +493,42 @@ export function githubRepoOf(url: string) {
   }
   return { repo: m[1], commit: m[2] || null, subdir };
 }
+
+/* ------------------------------------------------------------------ can this design be opened? */
+
+const usable = new Map<string, { until: number; value: Promise<boolean | null> }>();
+/** A Git LFS pointer is ~130 bytes; real schematic / board files are far larger. */
+const LFS_POINTER_MAX = 400;
+
+/**
+ * Whether a GitHub source holds an engineering project the viewer can import: a supported project
+ * whose schematic / board files are real files, not Git LFS pointers. Uses the same scan as an import
+ * (no file downloads). true / false are cached a day (a week for pinned commits); null = could not tell
+ * (GitHub quota, outage), never cached for long, and callers must not hide the design for it.
+ */
+export function githubUsable(url: string): Promise<boolean | null> {
+  const hit = usable.get(url);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (usable.size > 2000) usable.clear();
+  const pinned = /\/tree\/[0-9a-f]{40}(\/|$)/.test(url);
+  const value = (async (): Promise<boolean | null> => {
+    try {
+      const scan = await scanGithub(url);
+      const snap = snapshots.get(scan.token.split(".")[0]);
+      if (!snap) return null;
+      const size = new Map(snap.files.map((f) => [f.path, f.size]));
+      return scan.projects.some((p) =>
+        p.roots.some((r) => /\.(kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(r) && (size.get(r) || 0) > LFS_POINTER_MAX),
+      );
+    } catch (e) {
+      // No supported project (404), repository gone (404) or too large to scan (413): it cannot be opened.
+      if (e instanceof SourceError && (e.status === 404 || e.status === 413)) return false;
+      return null;
+    }
+  })();
+  usable.set(url, { until: Date.now() + (pinned ? 7 : 1) * 86_400_000, value });
+  value.then((v) => {
+    if (v === null) usable.set(url, { until: Date.now() + 10 * 60_000, value });
+  });
+  return value;
+}

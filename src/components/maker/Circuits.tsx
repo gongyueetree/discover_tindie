@@ -7,6 +7,7 @@
  * (full KiCad / EAGLE / Altium / EasyEDA / JLCEDA files, at least one GitHub star).
  */
 import Linkify from "./Linkify";
+import { checkUsable } from "@/lib/maker/usable-client";
 import GraphEmbed from "./GraphEmbed";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
@@ -47,6 +48,9 @@ export default function Circuits() {
   const [mpn, setMpn] = useState(params.get("mpn") || "");
   const [q, setQ] = useState(params.get("mpn") || "");
   const [list, setList] = useState<Listing | null>(null);
+  // Designs whose repository turned out to hold no openable engineering files (checked per card).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const hiddenHere = (list?.items || []).filter((d) => hidden.has(d.id)).length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -313,9 +317,15 @@ export default function Circuits() {
           </div>
           <ul className="atlas-grid">
             {(list?.items || []).map((d) => (
-              <DesignCard key={d.id} d={d} onOpen={() => openDesign(d.id)} />
+              <DesignCard key={d.id} d={d} onOpen={() => openDesign(d.id)} onUnusable={() => setHidden((h) => new Set(h).add(d.id))} />
             ))}
           </ul>
+          {hiddenHere > 0 && (
+            <p className="muted atlas-hidden-note">
+              {hiddenHere} {hiddenHere === 1 ? "design is" : "designs are"} hidden here: {hiddenHere === 1 ? "its repository has" : "their repositories have"} no
+              engineering files this viewer can open (for example, files stored with Git LFS).
+            </p>
+          )}
           {busy && <p className="notice">Loading designs…</p>}
           {!busy && list && !list.items.length && !error && (
             <div className="atlas-empty">
@@ -338,9 +348,35 @@ export default function Circuits() {
 }
 
 /** eelib CircuitAtlas DesignCard: picture (or "no preview"), name, facts, licence at the bottom. */
-function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
+function DesignCard({ d, onOpen, onUnusable }: { d: Design; onOpen: () => void; onUnusable: () => void }) {
+  const [gone, setGone] = useState(false);
+  const host = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (d.kind !== "open_source" || !host.current) return;
+    const el = host.current;
+    let alive = true;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        void checkUsable(d.id).then((ok) => {
+          if (alive && ok === false) {
+            setGone(true);
+            onUnusable();
+          }
+        });
+      },
+      { rootMargin: "600px 0px" },
+    );
+    io.observe(el);
+    return () => {
+      alive = false;
+      io.disconnect();
+    };
+  }, [d.id, d.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (gone) return null;
   return (
-    <li className="atlas-card">
+    <li className="atlas-card" ref={host}>
       <button className="atlas-card-pic" onClick={onOpen} tabIndex={-1} aria-hidden>
         {d.kind === "open_source" ? (
           <CardPicture d={d} />
