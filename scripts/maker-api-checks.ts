@@ -40,7 +40,9 @@ const routes: Record<string, (c: Call) => unknown> = {
     new Response('(kicad_symbol_lib (symbol "EZ_WS2812B" (symbol "EZ_WS2812B_1_1" (pin input line (at -5.08 0 0) (length 2.54) (name "DIN") (number "4")))))', { headers: { "content-type": "application/x-kicad-symbol" } }),
   "/api/kg/v1/snapshots/current": () => ({ data: { snapshot_id: 1, designs: 40 }, meta: { computed_at: "2026-11-01T00:00:00Z" } }),
   "/api/kg/v1/rankings/functions/mcu/families": () => ({
-    data: { items: [{ family: "RP2040", label: "RP2040", manufacturer: "树莓派", kind: "ic", adoption_count: 12 }, { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", kind: "ic", adoption_count: 9 }] },
+    data: { items: [{ family: "CRCW060310K0", label: "CRCW060310K0FKEA", manufacturer: "Vishay", kind: "passive", adoption_count: 15 },
+      { family: "RP2040", label: "RP2040", manufacturer: "树莓派", kind: "ic", adoption_count: 12 }, { family: "BSS138", label: "BSS138", manufacturer: "onsemi", kind: "discrete", adoption_count: 10 },
+      { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", kind: "ic", adoption_count: 9 }] },
     meta: { denominator_count: 20, pagination: { total: 2 } },
   }),
   "/api/kg/v1/neighborhood": (c) => ({
@@ -123,11 +125,12 @@ async function main() {
   const { GET: graphGet } = await import("../src/app/api/maker/graph/route");
   r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=mcu", { headers: { "x-forwarded-for": "203.0.113.9" } }));
   d = await r.json();
-  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128"]);
+  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128", "BSS138"], "ICs first, passives never; discretes only fill a module with few ICs");
   assert.equal(d.edges.length, 1);
   assert.deepEqual(d.scope.module, { id: "mcu", designs: 20, items: [
     { family: "RP2040", label: "RP2040", manufacturer: "Raspberry Pi", count: 12 },
     { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", count: 9 },
+    { family: "BSS138", label: "BSS138", manufacturer: "onsemi", count: 10 },
   ] });
   // one visitor action = one call attributed to the visitor; the fan-out counts only toward the key
   const graphCalls = calls.filter((c) => c.url.pathname.startsWith("/api/kg/v1/"));
