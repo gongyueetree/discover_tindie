@@ -114,20 +114,35 @@ function SymbolPin({ pin, end, dir }: { pin: Pin; end: XY; dir: XY }) {
   const showNumber = pin.showNumber ?? !pin.hideNumber;
   const showName = (pin.showName ?? !pin.hideName) && pin.name && pin.name !== "~";
   const numberSize = pin.numberSize ?? 1, nameSize = pin.nameSize ?? 1.1;
+  const vertical = Math.abs(dir[1]) > 0.5;
   return (
     <g {...props}>
       {on ? <line x1={pin.x} y1={pin.y} x2={end[0]} y2={end[1]} stroke={K.hi} strokeWidth={0.9} strokeLinecap="round" opacity={0.35} /> : null}
       <line x1={pin.x} y1={pin.y} x2={end[0]} y2={end[1]} stroke={on ? K.hi : K.pin} strokeWidth={on ? 0.3 : 0.15} />
       <circle cx={pin.x} cy={pin.y} r={0.25} fill="none" stroke={on ? K.hi : K.pin} strokeWidth={0.1} />
       {showNumber ? (
-        <text x={(pin.x + end[0]) / 2} y={(pin.y + end[1]) / 2 - 0.4} fontSize={numberSize} textAnchor="middle" fill={on ? K.hi : K.pinNumber} fontWeight={on ? 700 : 400}>
-          {pin.number}
-        </text>
+        vertical ? (
+          // Vertical pin: number beside the line, reading bottom-to-top as in KiCad.
+          <text transform={`translate(${(pin.x + end[0]) / 2} ${(pin.y + end[1]) / 2}) rotate(-90)`} y={-0.4} fontSize={numberSize} textAnchor="middle" fill={on ? K.hi : K.pinNumber} fontWeight={on ? 700 : 400}>
+            {pin.number}
+          </text>
+        ) : (
+          <text x={(pin.x + end[0]) / 2} y={(pin.y + end[1]) / 2 - 0.4} fontSize={numberSize} textAnchor="middle" fill={on ? K.hi : K.pinNumber} fontWeight={on ? 700 : 400}>
+            {pin.number}
+          </text>
+        )
       ) : null}
       {showName ? (
-        <text x={end[0] + dir[0] * 0.6} y={end[1] + dir[1] * 0.6 + 0.4} fontSize={nameSize} textAnchor={dir[0] > 0.5 ? "start" : dir[0] < -0.5 ? "end" : "middle"} fill={on ? K.hi : K.pinName} fontWeight={on ? 700 : 400}>
-          {pin.name}
-        </text>
+        vertical ? (
+          // Vertical pin: name inside the body, rotated with the pin (pointing down → text ends at the pin end).
+          <text transform={`translate(${end[0] + dir[0] * 0.6} ${end[1] + dir[1] * 0.6}) rotate(-90)`} y={0.4} fontSize={nameSize} textAnchor={dir[1] > 0 ? "end" : "start"} fill={on ? K.hi : K.pinName} fontWeight={on ? 700 : 400}>
+            {pin.name}
+          </text>
+        ) : (
+          <text x={end[0] + dir[0] * 0.6} y={end[1] + dir[1] * 0.6 + 0.4} fontSize={nameSize} textAnchor={dir[0] > 0.5 ? "start" : dir[0] < -0.5 ? "end" : "middle"} fill={on ? K.hi : K.pinName} fontWeight={on ? 700 : 400}>
+            {pin.name}
+          </text>
+        )
       ) : null}
     </g>
   );
