@@ -158,20 +158,31 @@ export default function Planner() {
         );
         if (!Array.isArray(parts) || parts.length > 100)
           throw Error("Import up to 100 parts.");
+        const failed: string[] = [];
         for (const p of parts) {
           if (cancelled) return;
-          if (!p.mpn)
-            throw Error(
-              "A part number is required to load a catalogue footprint.",
+          if (!p.mpn) {
+            failed.push("(no part number)");
+            continue;
+          }
+          try {
+            const r = await fetch(
+              "/api/maker/library?" +
+                new URLSearchParams({
+                  kind: "ezplm",
+                  mpn: p.mpn,
+                  ...(String(p.id || "").startsWith("p_") ? { partId: p.id } : {}),
+                }),
             );
-          const r = await fetch(
-            "/api/maker/library?" +
-              new URLSearchParams({ kind: "ezplm", mpn: p.mpn }),
-          );
-          const d = await r.json();
-          if (!r.ok) throw Error(d.error);
-          if (!cancelled) addSource({ ...d, part: p });
+            const d = await r.json();
+            if (!r.ok) throw Error(d.error);
+            if (!cancelled) addSource({ ...d, part: p });
+          } catch (e) {
+            failed.push(`${p.mpn}: ${e instanceof Error ? e.message : String(e)}`);
+          }
         }
+        if (failed.length && !cancelled)
+          setError(`Not placed (no footprint available): ${failed.join("; ")}`);
       } catch (e) {
         if (!cancelled) setError(String(e));
       }

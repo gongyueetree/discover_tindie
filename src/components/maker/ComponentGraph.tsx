@@ -7,6 +7,7 @@ import FamilyVariants from "./FamilyVariants";
 import { ToolHeading } from "./ToolShell";
 
 import type { GraphData } from "@/lib/maker/component-graph";
+import FamilyInfo from "./FamilyInfo";
 export function graphPositions(n: number) {
   return Array.from({ length: n }, (_, i) => {
     const angle = i * 2.399963;
@@ -17,20 +18,17 @@ export function graphPositions(n: number) {
     };
   });
 }
-const colors: Record<string, string> = {
-  "BOM MPN": "#159eae",
-  "BOM value · MPN unverified": "#ec9255",
-};
+import { KIND_COLORS as colors } from "./GraphEmbed";
 export default function ComponentGraph({ data }: { data: GraphData }) {
   const parts = data.nodes.map((n) => [n.label, n.identity, n.count] as const);
   const edges = data.edges.map((e) => ({ ...e, type: "Co-occurrence" }));
   const initial = graphPositions(parts.length);
+  // matchedPart is the knowledge graph's family key (e.g. STM32F103); labels are member part numbers.
   const focusIndex = data.nodes.findIndex(
     (n) =>
-      n.label === partFamily(data.scope.matchedPart).family ||
-      n.variants.some(
-        (v) => v.mpn.toUpperCase() === data.scope.matchedPart.toUpperCase(),
-      ),
+      n.id === data.scope.matchedPart ||
+      n.label.toUpperCase() === data.scope.matchedPart.toUpperCase() ||
+      n.label === partFamily(data.scope.matchedPart).family,
   );
   if (focusIndex >= 0) initial[focusIndex] = { x: 450, y: 330 };
   const [lookup, setLookup] = useState<string | null>(null);
@@ -140,39 +138,26 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
   }
   return (
     <>
-      <button
-        className="btn small"
-        aria-pressed={tour}
-        onClick={() => setTour((v) => !v)}
-      >
-        {tour ? "Pause tour" : "Auto tour"}
-      </button>
       <ToolHeading
-        eyebrow="CONNECTED COMPONENT FAMILIES"
-        title="Every family has a network."
-        description="Relationships calculated from real Explore circuits BOMs. Select a family to compare its MPN variants and shared projects."
+        eyebrow="Component knowledge graph"
+        title="Which parts go together"
+        description="Component families that appear on the same boards across open-source designs. Select a family to see its designs, related families and candidate alternatives."
       />
       {data.scope.matchedPart && focusIndex < 0 && (
         <p className="notice">
-          This exact part or family was not identified in the loaded BOMs.
-          Showing related search results.
+          {data.scope.matchedPart} is not in the graph yet (too few designs use it). Showing the most common families instead.
         </p>
       )}
       <div className="graph-source-note">
-        <b>Explore circuits · Real BOM data</b>
+        <b>Tindie parts database · knowledge graph snapshot</b>
         <span>
-          {data.scope.loaded}/{data.scope.requested} design BOMs loaded ·{" "}
-          {data.scope.projects} distinct projects · {data.scope.failed} failed ·{" "}
-          {data.scope.truncated} truncated BOMs. Showing {parts.length} of{" "}
-          {data.scope.eligibleNodes} identified families. This is a bounded
-          catalogue selection, not whole-catalogue statistics.
+          {data.scope.projects.toLocaleString()} representative open-source designs · showing {parts.length} of{" "}
+          {data.scope.eligibleNodes.toLocaleString()} families. A family is a part number without package, packing
+          and temperature suffixes (STM32F103C8T6 → STM32F103).
         </span>
         <span>
-          Calculated {new Date(data.scope.generatedAt).toLocaleString()}
-          {data.scope.sourceDate
-            ? ` · Catalogue snapshot ${data.scope.sourceDate.slice(0, 10)}`
-            : ""}
-          .
+          Snapshot {data.scope.sourceDate ? new Date(data.scope.sourceDate).toLocaleDateString() : "date unknown"}.
+          Appearing on the same board is not proof of an electrical connection or compatibility.
         </span>
       </div>
       <div className="graph-toolbar">
@@ -193,6 +178,9 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
           </select>
         </label>
         <div className="graph-controls">
+          <button className="btn" aria-pressed={tour} onClick={() => setTour((v) => !v)}>
+            {tour ? "Pause tour" : "Auto tour"}
+          </button>
           <button
             className="btn"
             aria-label="Zoom out"
@@ -254,7 +242,7 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
               {parts.length} families · {visible.length} relationships
             </b>
             <span>
-              Node size = project frequency · Line width = shared projects
+              Node size = designs using the family · Line width = designs using both
             </span>
           </div>
           <svg
@@ -304,7 +292,7 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
                     transform={`translate(${positions[i].x} ${positions[i].y})`}
                     role="button"
                     tabIndex={0}
-                    aria-label={`Select ${p[0]}, ${p[2]} projects`}
+                    aria-label={`Select ${p[0]}, used in ${p[2]} designs`}
                     aria-pressed={active}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -322,7 +310,7 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
                     }}
                   >
                     <title>
-                      {p[0]} · {p[1]} · {p[2]} projects
+                      {p[0]} · {p[1]} · {p[2]} designs
                     </title>
                     {active && (
                       <circle
@@ -378,12 +366,13 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
           <div className="eyebrow">FAMILY CONNECTIONS</div>
           <h2>{part[0]}</h2>
           <span className="graph-category" style={{ color: colors[part[1]] }}>
-            {part[1]}
+            {part[1]} · family {data.nodes[selected].id}
+            {data.nodes[selected].manufacturer ? ` · ${data.nodes[selected].manufacturer}` : ""}
           </span>
           <div className="graph-stats">
             <div>
               <strong>{part[2]}</strong>
-              <span>Projects</span>
+              <span>Designs</span>
             </div>
             <div>
               <strong>{connected.length}</strong>
@@ -398,24 +387,15 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
           </Link>
           <Link
             className="btn"
-            href={"/tools/circuits?mpn=" + encodeURIComponent(part[0])}
+            href={"/tools/circuits?family=" + encodeURIComponent(data.nodes[selected].id)}
           >
-            Search open projects →
+            Open designs with this family →
           </Link>
           <FamilyVariants
             key={data.nodes[selected].id}
             node={data.nodes[selected]}
           />
-          <h3>Source projects</h3>
-          {data.nodes[selected].projects.map((p) => (
-            <Link
-              className="graph-project"
-              key={p.id}
-              href={"/tools/circuits?project=" + encodeURIComponent(p.id)}
-            >
-              {p.name} ↗
-            </Link>
-          ))}
+          <FamilyInfo key={"info-" + data.nodes[selected].id} family={data.nodes[selected].id} />
           <h3>Related families</h3>
           {connected.length ? (
             connected.map((e) => {
@@ -433,8 +413,9 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
                     {parts[id][0]} <span>↗</span>
                   </b>
                   <small>
-                    {e.weight} shared projects · Jaccard{" "}
-                    {(e.jaccard * 100).toFixed(0)}%
+                    {e.weight} designs use both
+                    {(e as any).lift ? ` · ${(e as any).lift.toFixed(1)}× more often than chance` : ""}
+                    {(e as any).strong ? " · strong" : ""}
                   </small>
                   <div className="graph-meter">
                     <i
@@ -453,7 +434,7 @@ export default function ComponentGraph({ data }: { data: GraphData }) {
           )}
           <p className="graph-hint">
             Co-occurrence is not electrical connectivity or proof of
-            compatibility. Catalog and project links run separate live searches.
+            compatibility.
           </p>
         </aside>
       </div>

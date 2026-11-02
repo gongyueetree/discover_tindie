@@ -1,12 +1,30 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Search, ExternalLink, Box, ArrowRight } from "lucide-react";
+import { Search, ExternalLink, Box, ArrowRight, CircuitBoard, Star } from "lucide-react";
 import GraphEmbed from "./GraphEmbed";
 import DatasheetReader from "./DatasheetReader";
 import CadPreview from "./CadPreview";
 import { ToolHeading } from "./ToolShell";
 import type { Part, ProviderStatus } from "@/lib/maker/types";
+
+type DesignCard = {
+  id: string;
+  name: string;
+  kind: "open_source" | "vendor";
+  stars: number | null;
+  license: string | null;
+  partCount: number;
+  sourceUrl: string;
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  ezplm: "ezPLM",
+  enriched: "reviewed",
+  distributor: "distributor",
+};
+const EXAMPLES = ["STM32F103C8T6", "ESP32-S3", "AMS1117", "LM358"];
+
 export default function Components() {
   const params = useSearchParams();
   const initialQuery = params.get("q") || "";
@@ -17,94 +35,122 @@ export default function Components() {
     [items, setItems] = useState<Part[]>([]),
     [sources, setSources] = useState<ProviderStatus[]>([]),
     [selected, setSelected] = useState<Part | null>(null),
+    [detailState, setDetailState] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [searched, setSearched] = useState(false),
-    [refs, setRefs] = useState<
-      {
-        id: string;
-        projectName: string;
-        designators?: string[];
-        matchedMpn?: string;
-      }[]
-    >([]),
+    [refs, setRefs] = useState<DesignCard[]>([]),
+    [refsTotal, setRefsTotal] = useState(0),
     [refsState, setRefsState] = useState("");
+  const details = useRef(new Map<string, Part>());
+
   async function search(v = q, requireExact = false) {
+    const query = v.trim();
+    if (query.length < 2) return;
     setBusy(true);
     setError("");
     setSelected(null);
-
     try {
-      const r = await fetch("/api/maker/parts?q=" + encodeURIComponent(v));
+      const r = await fetch("/api/maker/parts?q=" + encodeURIComponent(query));
       const d = await r.json();
       if (!r.ok) throw Error(d.error);
-      setItems(d.items);
-      const exactPart = (d.items as Part[]).find(
+      const rows: Part[] = d.items || [];
+      setItems(rows);
+      const exactPart = rows.find(
         (p) =>
-          p.mpn.toUpperCase() === v.toUpperCase() &&
+          p.mpn.toUpperCase() === query.toUpperCase() &&
           (!targetPartId || p.id === targetPartId) &&
-          (!targetManufacturer ||
-            p.manufacturer.toUpperCase() === targetManufacturer.toUpperCase() ||
-            (/^ST(?:MICROELECTRONICS)?$/i.test(p.manufacturer) &&
-              /^ST(?:MICROELECTRONICS)?$/i.test(targetManufacturer))),
+          (!targetManufacturer || p.manufacturer.toUpperCase() === targetManufacturer.toUpperCase()),
       );
-      setSelected(requireExact ? exactPart || null : d.items[0] || null);
+      setSelected(requireExact ? exactPart || null : exactPart || rows[0] || null);
       if (requireExact && !exactPart)
         setError(
-          "The exact MPN is not available from the connected catalog. Related results are listed below; no substitute was selected.",
+          "That exact part number is not in the parts database. Related results are listed below; no substitute was selected.",
         );
-      setSources(d.sources);
+      setSources(d.sources || []);
       setSearched(true);
+      const url = new URL(location.href);
+      url.searchParams.set("q", query);
+      history.replaceState(null, "", url);
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
+      setSearched(true);
+      setItems([]);
     } finally {
       setBusy(false);
     }
   }
+
   useEffect(() => {
-    const v = initialQuery;
-    if (v) {
-      setQ(v);
-      void search(v, exact);
+    if (initialQuery) {
+      setQ(initialQuery);
+      void search(initialQuery, exact);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, exact, targetManufacturer, targetPartId]);
+
+  // Search rows are summaries; read the full record (symbol, footprint, parameters…) on selection.
+  const selectedId = selected?.id || "";
+  useEffect(() => {
+    if (!selected || selected.detailed || !selectedId.startsWith("p_")) return;
+    const cached = details.current.get(selectedId);
+    if (cached) return setSelected(cached);
+    const ac = new AbortController();
+    setDetailState("Loading part details…");
+    fetch("/api/maker/parts/" + selectedId, { signal: ac.signal })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw Error(d.error);
+        details.current.set(selectedId, d.part);
+        setItems((old) => old.map((p) => (p.id === selectedId ? d.part : p)));
+        setSelected((cur) => (cur?.id === selectedId ? d.part : cur));
+        setDetailState("");
+      })
+      .catch((e) => {
+        if (!ac.signal.aborted) setDetailState(e.message);
+      });
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
   useEffect(() => {
     setRefs([]);
-    if (!selected) return;
+    setRefsTotal(0);
+    if (!selectedId.startsWith("p_")) {
+      setRefsState(selected ? "Open-hardware links are available for parts from the Tindie parts database." : "");
+      return;
+    }
     const ac = new AbortController();
-    setRefsState("Loading open engineering projects…");
-    fetch("/api/maker/references/" + encodeURIComponent(selected.mpn), {
-      signal: ac.signal,
-    })
+    setRefsState("Loading open-hardware designs…");
+    fetch("/api/maker/references/" + selectedId, { signal: ac.signal })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok) throw Error(d.error);
         setRefs(d.items || []);
-        setRefsState(
-          d.items?.length
-            ? ""
-            : "No indexed open engineering project contains this exact part number.",
-        );
+        setRefsTotal(d.total || 0);
+        setRefsState(d.items?.length ? "" : "No published open-hardware design uses this exact part yet.");
       })
       .catch((e) => {
         if (!ac.signal.aborted) setRefsState(e.message);
       });
     return () => ac.abort();
-  }, [selected?.mpn]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
   function sendToPlanner() {
     if (!selected) return;
     sessionStorage.setItem("maker-planner-parts", JSON.stringify([selected]));
     location.href = "/tools/planner?import=components";
   }
 
+  const fs = selected?.fieldSources || {};
   return (
     <>
       <ToolHeading
-        eyebrow="COMPONENT EXPLORER"
-        title="Find the right part. See the whole picture."
-        description="Search part numbers, specifications and CAD assets from the connected eelib catalogue."
+        eyebrow="Component explorer"
+        title="Find the right part"
+        description="Search part numbers in the Tindie parts database: specifications, datasheets, KiCad symbols and footprints, and the open-source designs that use them."
       />
-      <GraphEmbed compact mpn={selected?.mpn || ""} />
       <form
         className="search-bar"
         onSubmit={(e) => {
@@ -117,170 +163,201 @@ export default function Components() {
           aria-label="Search components"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Try AD9102, STM32F103 or a component specification"
+          placeholder="Part number, e.g. STM32F103C8T6, AMS1117, LM358"
           minLength={2}
           required
         />
         <button className="btn primary" disabled={busy}>
-          {busy ? "Searching…" : "Search components"}
+          {busy ? "Searching…" : "Search"}
         </button>
       </form>
-      <div className="source-status">
-        {sources.map((s) => (
-          <span key={s.source} className={s.status} title={s.message}>
-            {s.source} ·{" "}
-            {s.status === "unconfigured"
-              ? "direct API not configured"
-              : s.status}
-          </span>
-        ))}
-      </div>
+      {sources.length > 0 && (
+        <div className="source-status">
+          {sources
+            .filter((s) => s.status !== "unconfigured")
+            .map((s) => (
+              <span key={s.source} className={s.status} title={s.message}>
+                {s.source} · {s.status === "ready" ? "connected" : "unavailable"}
+              </span>
+            ))}
+        </div>
+      )}
       {error && (
         <p role="alert" className="notice error">
           {error}
         </p>
       )}
       {!searched && !busy ? (
-        <div className="dropzone">
-          <Box size={42} />
-          <h2>From part number to project.</h2>
-          <p>
-            Datasheets, footprints, 3D models and related open hardware in one
-            place.
-          </p>
-          <div className="source-pills">
-            {["AD9102", "ESP32", "STM32F103"].map((v) => (
-              <button
-                className="btn"
-                key={v}
-                onClick={() => {
-                  setQ(v);
-                  void search(v, exact);
-                }}
-              >
-                {v}
-                <ArrowRight size={14} />
-              </button>
-            ))}
+        <>
+          <div className="dropzone">
+            <Box size={42} color="#22b8c4" />
+            <h2>From part number to project</h2>
+            <p>Datasheets, footprints, 3D models and related open hardware in one place.</p>
+            <div className="chip-row" style={{ justifyContent: "center", marginTop: 16 }}>
+              {EXAMPLES.map((v) => (
+                <button
+                  className="chip"
+                  key={v}
+                  onClick={() => {
+                    setQ(v);
+                    void search(v, false);
+                  }}
+                >
+                  {v}
+                  <ArrowRight size={14} />
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+          <div style={{ marginTop: 22 }}>
+            <GraphEmbed compact />
+          </div>
+        </>
       ) : (
         <div className="part-layout">
           <section>
             <div className="section-top">
-              <h2>{items.length ? `${items.length} results` : "No matches"}</h2>
-              <span>Live catalogue · exact variants shown separately</span>
+              <h2>{items.length ? `${items.length} ${items.length === 1 ? "result" : "results"}` : "No matches"}</h2>
+              <span>Exact part number first</span>
             </div>
             {items.map((p) => (
               <button
                 key={p.id + p.source}
-                className={
-                  "part-card " + (selected?.id === p.id ? "selected" : "")
-                }
-                onClick={() => setSelected(p)}
+                className={"part-card " + (selected?.id === p.id ? "selected" : "")}
+                onClick={() => setSelected(details.current.get(p.id) || p)}
+                aria-pressed={selected?.id === p.id}
               >
                 <div className="part-icon">
                   <Box size={25} />
                 </div>
                 <div>
                   <h3>{p.mpn}</h3>
-                  <small>{p.manufacturer}</small>
-                  <p>{p.description}</p>
+                  <small>{p.manufacturer || "Manufacturer not provided"}</small>
+                  {p.description && <p>{p.description}</p>}
                   <div className="source-pills">
-                    <span>{p.package || "Package not provided"}</span>
-                    <span>{p.source}</span>
-                    {p.cad.length > 0 && <span>{p.cad.length} CAD assets</span>}
+                    {p.category && <span>{p.category}</span>}
+                    {p.package && <span>{p.package}</span>}
+                    {p.lifecycle && <span>{p.lifecycle}</span>}
+                    {p.source !== "Tindie parts database" && <span>{p.source}</span>}
                   </div>
                 </div>
                 <ArrowRight size={17} />
               </button>
             ))}
-            {!items.length && (
+            {!items.length && !error && (
               <div className="notice">
-                No parts returned. Check provider status or try a full
-                manufacturer part number.
+                Nothing found. Try the full manufacturer part number, or the first few characters of it.
               </div>
             )}
           </section>
-          <aside className="candidate-panel">
+          <aside className="candidate-panel" aria-live="polite">
             {selected ? (
               <>
-                <span className="eyebrow">PART DETAILS</span>
+                <span className="eyebrow">Part details</span>
                 <div className="part-title-actions">
                   <h3>{selected.mpn}</h3>
-                  <GraphEmbed
-                    key={selected.mpn}
-                    mpn={selected.mpn}
-                    triggerOnly
-                  />
+                  <GraphEmbed key={selected.mpn} mpn={selected.mpn} triggerOnly />
                 </div>
-                <p>{selected.manufacturer}</p>
-                <p>{selected.description}</p>
-                <CadPreview key={selected.id} mpn={selected.mpn} />
+                <p>
+                  <b>{selected.manufacturer}</b>
+                  {selected.category ? ` · ${selected.category}` : ""}
+                  {selected.lifecycle ? ` · ${selected.lifecycle}` : ""}
+                </p>
+                {selected.description && <p>{selected.description}</p>}
+                {detailState && <p className="muted">{detailState}</p>}
+                {selected.id.startsWith("p_") && <CadPreview key={selected.id} partId={selected.id} mpn={selected.mpn} />}
+                {selected.withheld?.length ? (
+                  <p className="notice">
+                    {selected.withheld.join(" and ")} withheld: the database has conflicting sources for this field
+                    and does not publish it until reviewed.
+                  </p>
+                ) : null}
                 <div className="source-pills">
-                  {selected.datasheet && (
-                    <DatasheetReader url={selected.datasheet} />
-                  )}
-                  {selected.cad.map((c) => (
-                    <a
-                      className="btn small"
-                      key={c.kind}
-                      href={c.url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {c.name}
-                      <ExternalLink size={12} />
+                  {selected.datasheet && <DatasheetReader url={selected.datasheet} />}
+                  {selected.productUrl && (
+                    <a className="btn small" href={selected.productUrl} target="_blank" rel="noreferrer">
+                      Manufacturer page <ExternalLink size={12} />
                     </a>
-                  ))}
+                  )}
+                  {!selected.datasheet && selected.hasDatasheetInEzplm && (
+                    <span className="pill muted">Datasheet on file (not public)</span>
+                  )}
                 </div>
-                <dl className="spec-list">
-                  {Object.entries(selected.parameters).map(([k, v]) => (
-                    <div key={k}>
-                      <dt>{k}</dt>
-                      <dd>{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-                <button className="btn" onClick={sendToPlanner}>
-                  Add to PCB layout
-                  <ArrowRight size={14} />
-                </button>
+                {(selected.symbolName || selected.footprintName) && (
+                  <dl className="spec-list">
+                    {selected.symbolName && (
+                      <div>
+                        <dt>Symbol</dt>
+                        <dd>
+                          {selected.symbolName}
+                          {fs.symbol && <span className="field-source">{SOURCE_LABEL[fs.symbol] || fs.symbol}</span>}
+                        </dd>
+                      </div>
+                    )}
+                    {selected.footprintName && (
+                      <div>
+                        <dt>Footprint</dt>
+                        <dd>
+                          {selected.footprintName}
+                          {fs.footprint && <span className="field-source">{SOURCE_LABEL[fs.footprint] || fs.footprint}</span>}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                )}
+                {Object.keys(selected.parameters).length > 0 && (
+                  <dl className="spec-list">
+                    {Object.entries(selected.parameters).map(([k, v]) => (
+                      <div key={k}>
+                        <dt>{k}</dt>
+                        <dd>
+                          {v}
+                          {fs[k] && <span className="field-source">{SOURCE_LABEL[fs[k]] || fs[k]}</span>}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                <div className="source-pills">
+                  <button className="btn" onClick={sendToPlanner}>
+                    Add to PCB planner
+                    <ArrowRight size={14} />
+                  </button>
+                </div>
                 <h4 style={{ marginTop: 22, fontWeight: 600 }}>
-                  Open engineering projects
+                  Open hardware using this part{refsTotal ? ` · ${refsTotal}` : ""}
                 </h4>
-                <p>{refsState}</p>
-                {refs.map((r, i) => (
-                  <a
-                    className="text-link"
-                    style={{ display: "block", margin: "10px 0" }}
-                    key={i}
-                    href={"/tools/circuits?project=" + encodeURIComponent(r.id)}
-                  >
-                    {r.projectName}
-                    <small style={{ display: "block" }}>
-                      {r.matchedMpn} · {r.designators?.join(", ")}
+                {refsState && <p className="muted">{refsState}</p>}
+                {refs.map((r) => (
+                  <a key={r.id} className="design-row" href={"/tools/circuits?design=" + encodeURIComponent(r.id)}>
+                    <b>{r.name}</b>
+                    <small>
+                      {r.kind === "vendor" ? "Vendor reference design" : `Open source · ${r.license || "licence not stated"}`}
+                      {r.stars !== null ? (
+                        <>
+                          {" · "}
+                          <Star size={11} style={{ verticalAlign: -1 }} /> {r.stars.toLocaleString()}
+                        </>
+                      ) : null}
+                      {" · "}
+                      {r.partCount} identified parts
                     </small>
                   </a>
                 ))}
                 <a
                   className="btn primary"
-                  href={
-                    "/tools/circuits?mpn=" + encodeURIComponent(selected.mpn)
-                  }
+                  style={{ marginTop: 14 }}
+                  href={"/tools/circuits?mpn=" + encodeURIComponent(selected.mpn)}
                 >
-                  Explore this part and family in Circuit Explorer
-                  <ArrowRight size={14} />
+                  <CircuitBoard size={15} />
+                  Browse designs with this part
                 </a>
               </>
             ) : (
               <>
                 <Box size={25} />
                 <h3>Select a component</h3>
-                <p>
-                  Inspect specifications, open a datasheet or download available
-                  CAD files.
-                </p>
+                <p>Inspect specifications, open a datasheet or view the KiCad symbol, footprint and 3D model.</p>
               </>
             )}
           </aside>

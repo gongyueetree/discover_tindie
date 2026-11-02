@@ -39,7 +39,7 @@ export default function ProjectViewerModal({
       aria-label="Engineering project viewer"
     >
       <header>
-        <b>Explore circuits / Project viewer</b>
+        <b>Open hardware / Project viewer</b>
         <button className="btn" autoFocus onClick={onClose}>
           Close ×
         </button>

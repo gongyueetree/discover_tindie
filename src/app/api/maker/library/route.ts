@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
-import { eel } from "@/lib/maker/server";
-import { randomUUID } from "node:crypto";
+import { visitorHash } from "@/lib/partdata/client";
+import { partDetail, searchPartdata } from "@/lib/partdata/maker";
+import { resolveName, footprintUrl } from "@/lib/partdata/kicad-lib";
 const API =
   "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2Fkicad-footprints";
 const REV = "10.0.0";
@@ -27,30 +28,31 @@ export async function GET(req: NextRequest) {
     const q = req.nextUrl.searchParams;
     const kind = q.get("kind");
     if (kind === "ezplm") {
-      const mpn = q.get("mpn") || "";
-      if (!mpn || mpn.length > 120) throw Error("Invalid part number");
-      const d = await eel(
-        `components/${encodeURIComponent(mpn)}`,
-        randomUUID(),
-      );
-      const raw = d.assets?.kicadFootprint;
-      if (!raw)
-        throw Error("No source footprint is available for this exact part");
-      const u = new URL(raw);
-      const hosts = (process.env.MAKER_CAD_HOSTS || "qn.ezplm.com").split(",");
-      if (
-        u.protocol !== "https:" ||
-        u.username ||
-        u.password ||
-        !hosts.includes(u.hostname)
-      )
-        throw Error("CAD storage host is not configured");
+      // Footprint named by the Tindie parts database (partdata), drawn from the official KiCad library.
+      const partId = q.get("partId") || "";
+      const mpn = (q.get("mpn") || "").trim();
+      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+      const visitor = visitorHash(ip);
+      let id = /^p_[a-z2-7]{8,40}$/.test(partId) ? partId : "";
+      if (!id) {
+        if (!mpn || mpn.length > 120) throw Error("Invalid part number");
+        const found = await searchPartdata(mpn, visitor);
+        const exact = found.items.find((p) => p.mpn.toUpperCase() === mpn.toUpperCase());
+        if (!exact) throw Error(`${mpn} is not in the Tindie parts database`);
+        id = exact.id;
+      }
+      const part = await partDetail(id, visitor);
+      const fp = resolveName("footprint", part.footprintName);
+      if (!part.footprintName) throw Error(`No footprint is recorded for ${part.mpn}`);
+      if (!fp) throw Error(`Footprint ${part.footprintName} is not in the official KiCad library`);
+      const url = footprintUrl(fp.library, fp.name);
       return NextResponse.json({
-        text: await read(u.href, false),
-        name: d.assets.footprintName || d.package || mpn,
-        source: "EZPLM",
-        url: u.href,
-        model: !!d.assets.model3d,
+        text: await read(url, false),
+        name: `${fp.library}:${fp.name}`,
+        source: "KICAD",
+        url,
+        revision: REV,
+        model: true,
       });
     }
     const lib = q.get("library") || "",

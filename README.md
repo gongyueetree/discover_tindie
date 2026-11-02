@@ -1,5 +1,11 @@
 # Tindie Resources — Production System
 
+> **Discover page, four tabs:** Resources (this app, unchanged) · Components · Open hardware · PCB planner.
+> Component, design and knowledge-graph data come from the ezplm_partdata Partner API (signed, server-side);
+> CAD drawing and project parsing use engines from eelib. **See [DISCOVER_TABS.md](DISCOVER_TABS.md)** (中文) for
+> architecture, environment variables (`PARTDATA_API_BASE` / `PARTDATA_API_KEY` / `PARTDATA_API_SECRET`,
+> `MAKER_GITHUB_TOKEN`), local integration testing and the go-live checklist. `npm test` runs all offline checks.
+
 A real, database-backed Next.js app for the Tindie "Resources" section:
 
 - **Public site**: home (Top 12 daily discoveries), `/archive` (by day), `/directory` (50 curated resources)

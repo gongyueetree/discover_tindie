@@ -10,8 +10,9 @@ import {
   type RepoFile,
   type GithubProject,
 } from "./github-projects";
+// Must be the same on every server instance (scan and import can hit different serverless instances).
 const secret =
-  process.env.MAKER_IMPORT_SECRET || randomBytes(32).toString("hex");
+  process.env.MAKER_IMPORT_SECRET || process.env.AUTH_SECRET || randomBytes(32).toString("hex");
 type Snapshot = {
   repo: string;
   commit: string;
@@ -22,6 +23,11 @@ type Snapshot = {
   expires: number;
 };
 const snapshots = new Map<string, Snapshot>();
+// Overridable for local integration tests only (a mock GitHub); production uses the defaults.
+const GITHUB_API = (process.env.MAKER_GITHUB_API_BASE || "https://api.github.com").replace(/\/$/, "");
+const GITHUB_RAW = (process.env.MAKER_GITHUB_RAW_BASE || "https://raw.githubusercontent.com").replace(/\/$/, "");
+// Scans of URLs pinned to a full commit SHA are immutable: reuse them (saves GitHub API quota).
+const pinnedScans = new Map<string, { until: number; result: Promise<Awaited<ReturnType<typeof scanFresh>>> }>();
 function headers() {
   return {
     Accept: "application/vnd.github+json",
@@ -35,7 +41,7 @@ function headers() {
 async function github(path: string) {
   let r: Response;
   try {
-    r = await fetch("https://api.github.com" + path, {
+    r = await fetch(GITHUB_API + path, {
       headers: headers(),
       redirect: "error",
       signal: AbortSignal.timeout(20000),
@@ -86,30 +92,63 @@ export function parseGithubUrl(raw: string) {
     tail: p.slice(3),
   };
 }
+/**
+ * Selection token = base64url({repo, commit, ref, prefix, expiry}) + "." + HMAC. It is
+ * self-describing, so an instance that did not perform the scan can rebuild the snapshot
+ * from GitHub at the same immutable commit instead of failing.
+ */
+type TokenData = { r: string; c: string; f: string; p: string; e: number };
 function token(id: string) {
   return id + "." + createHmac("sha256", secret).update(id).digest("hex");
 }
-function snapshot(value: string) {
+function tokenId(d: TokenData) {
+  return Buffer.from(JSON.stringify(d)).toString("base64url");
+}
+async function snapshot(value: string): Promise<Snapshot> {
   const [id, sig] = value.split(".");
   if (
     !id ||
     !sig ||
+    !/^[A-Za-z0-9_-]{1,2000}$/.test(id) ||
     !/^[a-f0-9]{64}$/.test(sig) ||
-    !timingSafeEqual(
-      Buffer.from(sig, "hex"),
-      Buffer.from(token(id).split(".")[1], "hex"),
-    )
+    !timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(token(id).split(".")[1], "hex"))
   )
     throw new SourceError("Invalid import selection.", 400);
-  const s = snapshots.get(id);
-  if (!s || s.expires < Date.now())
-    throw new SourceError(
-      "The import selection expired. Scan the repository again.",
-      410,
-    );
+  let d: TokenData;
+  try {
+    d = JSON.parse(Buffer.from(id, "base64url").toString("utf8"));
+  } catch {
+    throw new SourceError("Invalid import selection.", 400);
+  }
+  if (!d || typeof d.e !== "number" || d.e < Date.now())
+    throw new SourceError("The import selection expired. Scan the repository again.", 410);
+  const cached = snapshots.get(id);
+  if (cached) return cached;
+  // Not scanned on this instance: rebuild from the same commit (immutable).
+  if (!/^[\w.-]+\/[\w.-]+$/.test(d.r) || !/^[0-9a-f]{40}$/.test(d.c))
+    throw new SourceError("Invalid import selection.", 400);
+  const commit = await github(`/repos/${d.r}/commits/${d.c}`);
+  const tree = await github(`/repos/${d.r}/git/trees/${commit.commit.tree.sha}?recursive=1`);
+  if (tree.truncated) throw new SourceError("This repository tree is too large to scan safely.", 413);
+  const files: RepoFile[] = tree.tree
+    .filter((f: any) => f.type === "blob" && f.mode !== "120000")
+    .map((f: any) => ({ path: f.path, sha: f.sha, size: f.size || 0, type: f.type, mode: f.mode }));
+  const s: Snapshot = { repo: d.r, commit: d.c, ref: d.f, prefix: d.p, files, projects: discoverProjects(files, d.p), expires: d.e };
+  if (snapshots.size >= 25) snapshots.delete(snapshots.keys().next().value!);
+  snapshots.set(id, s);
   return s;
 }
-export async function scanGithub(url: string) {
+export function scanGithub(url: string) {
+  if (!/\/tree\/[0-9a-f]{40}(\/|$)/.test(url)) return scanFresh(url);
+  const hit = pinnedScans.get(url);
+  if (hit && hit.until > Date.now()) return hit.result;
+  if (pinnedScans.size > 100) pinnedScans.clear();
+  const result = scanFresh(url);
+  pinnedScans.set(url, { until: Date.now() + 25 * 60 * 1000, result });
+  result.catch(() => pinnedScans.delete(url));
+  return result;
+}
+async function scanFresh(url: string) {
   const parsed = parseGithubUrl(url);
   const base = "/repos/" + parsed.repo;
   const repo = await github(base);
@@ -176,7 +215,8 @@ export async function scanGithub(url: string) {
   for (const [id, s] of snapshots)
     if (s.expires < Date.now()) snapshots.delete(id);
   if (snapshots.size >= 25) snapshots.delete(snapshots.keys().next().value!);
-  const id = randomBytes(20).toString("hex");
+  const expires = Date.now() + 30 * 60 * 1000;
+  const id = tokenId({ r: parsed.repo, c: commit.sha, f: ref, p: prefix, e: expires });
   snapshots.set(id, {
     repo: parsed.repo,
     commit: commit.sha,
@@ -184,7 +224,7 @@ export async function scanGithub(url: string) {
     prefix,
     files,
     projects,
-    expires: Date.now() + 30 * 60 * 1000,
+    expires,
   });
   return {
     token: token(id),
@@ -198,7 +238,7 @@ export async function scanGithub(url: string) {
   };
 }
 export async function importGithub(selection: string, projectId: string) {
-  const s = snapshot(selection),
+  const s = await snapshot(selection),
     project = s.projects.find((p) => p.id === projectId);
   if (!project)
     throw new SourceError(
@@ -245,7 +285,7 @@ export async function importGithub(selection: string, projectId: string) {
         "Selected design exceeds the 75 MB import limit.",
         413,
       );
-    const url = `https://raw.githubusercontent.com/${s.repo}/${s.commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
+    const url = `${GITHUB_RAW}/${s.repo}/${s.commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
     const r = await fetch(url, {
       headers: { "User-Agent": "Tindie-Maker-Tools" },
       redirect: "error",

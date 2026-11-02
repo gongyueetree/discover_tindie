@@ -149,41 +149,47 @@ export default function Bom({
     setBusy(true);
     setError("");
     try {
+      // The parts database bills BOM matching per 10 rows, so send rows in batches of 10.
+      const batches: BomRow[][] = [];
+      for (let i = 0; i < rows.length; i += 10) batches.push(rows.slice(i, i + 10));
       let cursor = 0,
         done = 0;
       setMatchProgress(`Checking 0 / ${rows.length}`);
       if (!active && rows[0]) setActive(rows[0].id);
       await Promise.all(
-        Array.from({ length: Math.min(3, rows.length) }, async () => {
-          while (cursor < rows.length) {
-            const row = rows[cursor++];
+        Array.from({ length: Math.min(2, batches.length) }, async () => {
+          while (cursor < batches.length) {
+            const batch = batches[cursor++];
             try {
               const response = await fetch("/api/maker/match", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ rows: matchRequestRows([row]) }),
+                body: JSON.stringify({ rows: matchRequestRows(batch) }),
                 signal: AbortSignal.timeout(90000),
               });
               const data = await response.json();
               if (!response.ok)
                 throw Error(data.error || `HTTP ${response.status}`);
-              const updated = data.rows?.[0];
-              if (updated)
-                setRows((old) =>
-                  old.map((x) =>
-                    x.id === row.id
-                      ? {
-                          ...updated,
-                          original: x.original,
-                          manualUnitPrice: x.manualUnitPrice,
-                        }
-                      : x,
-                  ),
-                );
+              const updated = new Map<string, BomRow>(
+                (data.rows || []).map((r: BomRow) => [r.id, r]),
+              );
+              setRows((old) =>
+                old.map((x) => {
+                  const u = updated.get(x.id);
+                  return u
+                    ? {
+                        ...u,
+                        original: x.original,
+                        manualUnitPrice: x.manualUnitPrice,
+                      }
+                    : x;
+                }),
+              );
             } catch (e) {
+              const ids = new Set(batch.map((r) => r.id));
               setRows((old) =>
                 old.map((x) =>
-                  x.id === row.id
+                  ids.has(x.id)
                     ? {
                         ...x,
                         reason: `Lookup failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -192,7 +198,7 @@ export default function Bom({
                 ),
               );
             }
-            done++;
+            done += batch.length;
             setMatchProgress(`Checked ${done} / ${rows.length}`);
           }
         }),
@@ -510,9 +516,9 @@ export default function Bom({
       {rows.length > 0 && (
         <>
           <p className="muted">
-            Matching sends part numbers and specifications to the connected
-            catalogue and supplier APIs. Your original BOM file stays in this
-            browser.
+            Matching sends part numbers and specifications to the Tindie parts
+            database (and distributor APIs when configured). Your original BOM
+            file stays in this browser.
           </p>
           <div className="bom-controls">
             <button

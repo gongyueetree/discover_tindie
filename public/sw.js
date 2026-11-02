@@ -2,7 +2,7 @@
 // Tindie Resources Service Worker (hand-written, no build step)
 // Bump CACHE_VERSION on every meaningful change to force clients to update.
 
-const CACHE_VERSION = 'tindie-v1';
+const CACHE_VERSION = 'tindie-v2'; // v2: four-tab Discover (Resources / Components / Open hardware / PCB planner)
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const PRECACHE = `${CACHE_VERSION}-precache`;
 

@@ -1,5 +1,13 @@
-import {MakerHome} from '@/components/maker/Home';
-import {ToolShell} from '@/components/maker/ToolShell';
-import {DiscoverContent} from '@/components/maker/DiscoverContent';
-export const dynamic='force-dynamic';
-export default function Embed(){return <div className="maker-embedded"><ToolShell><MakerHome/></ToolShell></div>}
+import { ToolShell } from "@/components/maker/ToolShell";
+import { DiscoverContent } from "@/components/maker/DiscoverContent";
+
+export const dynamic = "force-dynamic";
+
+// Chrome-free entry for iframing; identical to the home page (this app never renders site chrome).
+export default function Embed() {
+  return (
+    <ToolShell>
+      <DiscoverContent />
+    </ToolShell>
+  );
+}

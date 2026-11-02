@@ -1,0 +1,213 @@
+{
+"source": "gongyueetree/ezplm_partdata config/mfr_lineage.yaml (canonical)",
+"canonical": [
+{
+"name": "Texas Instruments",
+"match": "texas instruments|德州仪器|^ti$"
+},
+{
+"name": "Analog Devices",
+"match": "analog devices|亚德诺|^adi$"
+},
+{
+"name": "Microchip Technology",
+"match": "^microchip|微芯"
+},
+{
+"name": "Renesas Electronics",
+"match": "renesas|瑞萨"
+},
+{
+"name": "onsemi",
+"match": "^onsemi|^on semiconductor|安森美"
+},
+{
+"name": "Infineon Technologies",
+"match": "infineon|英飞凌"
+},
+{
+"name": "NXP Semiconductors",
+"match": "^nxp|恩智浦"
+},
+{
+"name": "STMicroelectronics",
+"match": "stmicro|意法半导体"
+},
+{
+"name": "Broadcom",
+"match": "broadcom|博通"
+},
+{
+"name": "Micron Technology",
+"match": "^micron( technology)?\\b|美光"
+},
+{
+"name": "SK hynix",
+"match": "hynix|海力士"
+},
+{
+"name": "Samsung Electro-Mechanics",
+"match": "samsung electro|三星电机"
+},
+{
+"name": "Samsung Semiconductor",
+"match": "samsung|三星"
+},
+{
+"name": "Kioxia",
+"match": "kioxia|铠侠"
+},
+{
+"name": "Toshiba",
+"match": "toshiba|东芝"
+},
+{
+"name": "ROHM",
+"match": "\\brohm\\b|罗姆"
+},
+{
+"name": "Vishay",
+"match": "vishay|威世"
+},
+{
+"name": "Diodes Inc",
+"match": "^diodes\\b|美台"
+},
+{
+"name": "Nexperia",
+"match": "nexperia|安世"
+},
+{
+"name": "Torex Semiconductor",
+"match": "torex|特瑞仕"
+},
+{
+"name": "ISSI",
+"match": "integrated silicon solution|^issi\\b"
+},
+{
+"name": "MaxLinear",
+"match": "maxlinear"
+},
+{
+"name": "Littelfuse",
+"match": "littelfuse|力特"
+},
+{
+"name": "Qorvo",
+"match": "qorvo"
+},
+{
+"name": "Skyworks Solutions",
+"match": "skyworks|思佳讯"
+},
+{
+"name": "MACOM",
+"match": "^macom|^m/a-com"
+},
+{
+"name": "Synaptics",
+"match": "synaptics"
+},
+{
+"name": "Marvell",
+"match": "marvell|美满"
+},
+{
+"name": "Coherent",
+"match": "^coherent|^ii-vi"
+},
+{
+"name": "ams OSRAM",
+"match": "ams[- ]?osram|^ams\\b|艾迈斯"
+},
+{
+"name": "ABLIC",
+"match": "^ablic|艾普凌科"
+},
+{
+"name": "Nisshinbo Micro Devices",
+"match": "nisshinbo|日清纺"
+},
+{
+"name": "Lattice Semiconductor",
+"match": "^lattice|莱迪思"
+},
+{
+"name": "AMD",
+"match": "^amd\\b|^advanced micro devices|超威"
+},
+{
+"name": "Intel",
+"match": "^intel\\b|英特尔"
+},
+{
+"name": "Altera",
+"match": "^altera|阿尔特拉"
+},
+{
+"name": "TDK",
+"match": "^tdk\\b|东电化"
+},
+{
+"name": "Murata",
+"match": "murata|村田"
+},
+{
+"name": "Panasonic",
+"match": "panasonic|松下"
+},
+{
+"name": "KYOCERA AVX",
+"match": "\\bavx\\b"
+},
+{
+"name": "KYOCERA",
+"match": "kyocera|京瓷"
+},
+{
+"name": "YAGEO",
+"match": "yageo|国巨|kemet|基美"
+},
+{
+"name": "Knowles",
+"match": "^knowles|楼氏"
+},
+{
+"name": "TT Electronics",
+"match": "^tt electronics"
+},
+{
+"name": "Amphenol",
+"match": "amphenol|安费诺"
+},
+{
+"name": "TE Connectivity",
+"match": "te connectivity|^tyco electronics|泰科电子"
+},
+{
+"name": "Molex",
+"match": "^molex|莫仕"
+},
+{
+"name": "Bel Fuse",
+"match": "^bel fuse|^bel power"
+},
+{
+"name": "Teledyne e2v",
+"match": "teledyne e2v"
+},
+{
+"name": "Frontgrade Technologies",
+"match": "frontgrade"
+},
+{
+"name": "Western Digital",
+"match": "western digital|西部数据"
+},
+{
+"name": "Seiko Epson",
+"match": "seiko epson|^epson|爱普生"
+}
+]
+}

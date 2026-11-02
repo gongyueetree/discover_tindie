@@ -1,14 +1,11 @@
 import { rankParts } from "./rank-parts";
 import "server-only";
-import { withUnit } from "./english";
-import { englishParts } from "./translation";
 import { createHash } from "node:crypto";
-import { searchParts, ezplmConfigured } from "@/vendor/bom2buy/partdata/ezplm";
+import { englishParts } from "./translation";
 import { keywordSearch } from "@/vendor/bom2buy/digikey";
-import type { Part, Offer, ProviderStatus } from "./types";
-export const EELIB_BASE = (
-  process.env.EELIB_PUBLIC_API_BASE || "https://eelib.io/api/proxy"
-).replace(/\/$/, "");
+import { PartdataError } from "@/lib/partdata/client";
+import { searchPartdata, status as partdataStatus } from "@/lib/partdata/maker";
+import type { Part, ProviderStatus } from "./types";
 export class SourceError extends Error {
   constructor(
     message: string,
@@ -29,144 +26,38 @@ export function safeLink(v: unknown) {
     return undefined;
   }
 }
-export async function eel(path: string, guest: string, init: RequestInit = {}) {
-  const r = await fetch(`${EELIB_BASE}/${path}`, {
-    ...init,
-    redirect: "error",
-    cache: "no-store",
-    signal: init.signal ?? AbortSignal.timeout(25000),
-    headers: {
-      "X-Guest-Id": guest,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
-  }).catch(() => {
-    throw new SourceError(
-      "The catalogue service is unreachable from this server. Check network access to eelib.io.",
-      502,
-    );
-  });
-  const j = await r.json().catch(() => null);
-  if (!r.ok || j?.ok === false)
-    throw new SourceError(
-      r.status === 429
-        ? "The shared catalogue quota is reached. Please try later."
-        : r.status === 401 || r.status === 403
-          ? "This operation requires an authorized eelib service connection."
-          : j?.error?.message || `Catalogue service returned HTTP ${r.status}`,
-      r.status,
-    );
-  if (j?.meta?.demo)
-    throw new SourceError(
-      "The upstream returned example data. It is not shown as a live result.",
-    );
-  return j?.data ?? j;
-}
-export function mapComponent(p: any): Part {
-  return {
-    id: String(p.id || p.mpn),
-    mpn: String(p.mpn || ""),
-    manufacturer: String(p.manufacturer || ""),
-    description: String(p.description || ""),
-    package: p.package,
-    datasheet: safeLink(p.datasheetUrl),
-    source: p.source || "eelib",
-    parameters: Object.fromEntries(
-      [...(p.parameters || []), ...(p.otherParameters || [])].map((v: any) => [
-        v.label || v.key,
-        withUnit(v.value, v.unit),
-      ]),
-    ),
-    cad: Object.entries(p.assets || {})
-      .filter(
-        ([k, v]) =>
-          ["kicadSymbol", "kicadFootprint", "model3d"].includes(k) &&
-          safeLink(v),
-      )
-      .map(([k, v]) => ({
-        name:
-          k === "kicadSymbol"
-            ? "KiCad symbol"
-            : k === "kicadFootprint"
-              ? "KiCad footprint"
-              : "3D model",
-        url: safeLink(v)!,
-        kind: k,
-      })),
-    offers: [],
-  };
-}
-export function mapPrice(p: any): Offer {
-  return {
-    supplier: p.source,
-    sku: p.sku,
-    currency: p.currency,
-    stock: typeof p.stock === "number" ? p.stock : null,
-    moq: p.moq || 1,
-    multiple: p.multiple || 1,
-    breaks: (p.priceBreaks || []).map((t: any) => ({
-      quantity: t.qty,
-      price: t.unitPrice,
-    })),
-    url: safeLink(p.url),
-    retrievedAt: p.updatedAt,
-  };
+/** Errors from partdata keep their HTTP status and visitor-facing message. */
+export function asSourceError(e: unknown) {
+  if (e instanceof SourceError) return e;
+  if (e instanceof PartdataError) return new SourceError(e.message, e.status);
+  return new SourceError(e instanceof Error ? e.message : "The request could not be completed.", 502);
 }
 export async function search(
   q: string,
-  guest: string,
+  visitor: string,
   includeSuppliers = false,
+  { partdata = true }: { partdata?: boolean } = {},
 ) {
   const parts: Part[] = [];
   const statuses: ProviderStatus[] = [];
-  await (async () => {
-    try {
-      const d = await eel(
-        `components/search?q=${encodeURIComponent(q)}&size=20`,
-        guest,
-      );
-      parts.push(...(d.items || []).map(mapComponent));
-      statuses.push({ source: "eelib / ezPLM", status: "ready" });
-    } catch (e) {
-      statuses.push({
-        source: "eelib",
-        status: "error",
-        message: (e as Error).message,
-      });
-    }
-  })();
-  await (async () => {
-    if (!ezplmConfigured()) return;
-    try {
-      parts.push(
-        ...(await searchParts(q, 10)).map((p) => ({
-          id: p.id,
-          mpn: p.mpn,
-          manufacturer: p.manufacturer,
-          description: p.description || "",
-          package: p.footprint,
-          source: "ezPLM direct",
-          datasheet: safeLink(p.pdf),
-          parameters: Object.fromEntries(
-            Object.entries(p.attributes || {})
-              .filter(([, v]) => typeof v === "string" || typeof v === "number")
-              .map(([k, v]) => [k, String(v)]),
-          ),
-          cad: [],
-          offers: [],
-        })),
-      );
-      statuses.push({ source: "ezPLM direct", status: "ready" });
-    } catch {
-      statuses.push({ source: "ezPLM direct", status: "error" });
-    }
-  })();
-  const exactCatalogue = parts.some(
-    (p) =>
-      p.mpn.trim().toUpperCase() === q.trim().toUpperCase() && p.manufacturer,
-  );
-  if (!exactCatalogue || includeSuppliers)
+  let catalogueExact = false;
+  if (partdata) try {
+    const r = await searchPartdata(q, visitor);
+    parts.push(...r.items);
+    catalogueExact = r.exact;
+    statuses.push(partdataStatus("ready"));
+  } catch (e) {
+    const err = asSourceError(e);
+    // A too-short query is the visitor's input, not a source failure.
+    if (err.status === 400) throw err;
+    statuses.push(
+      partdataStatus(
+        e instanceof PartdataError && e.code === "unconfigured" ? "unconfigured" : "error",
+        err.message,
+      ),
+    );
+  }
+  if (!catalogueExact || includeSuppliers)
     await Promise.all([
       (async () => {
         if (

@@ -1,0 +1,407 @@
+/*
+ * Tindie theme for the Discover tabs.
+ * Loaded after maker.css: re-skins the prototype's tool components with the live Discover
+ * page's design language (Poppins, turquoise #22b8c4, #ececec 1px borders, 11–12px card radius,
+ * #fafdfd title band, 1200px column, 13.5–15.5px body text). Values mirror tailwind.config.ts.
+ */
+.maker {
+  --tq: #22b8c4;
+  --tq-600: #1aa0ab;
+  --tq-dark: #1c6e7e;
+  --accent: #1aa0ab;
+  --ink: #3a3f44;
+  --head: #2f3438;
+  --muted: #8a9499;
+  --muted-2: #6a7176;
+  --line: #ececec;
+  --soft: #f7f8f8;
+  --band: #fafdfd;
+  --orange: #f2762e;
+  color: var(--ink);
+  font-family: "Poppins", "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  min-height: 0;
+}
+.maker a { color: inherit; }
+.maker button:focus-visible,
+.maker a:focus-visible,
+.maker input:focus-visible,
+.maker select:focus-visible {
+  outline: 2px solid var(--tq);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- tab bar */
+.tindie-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.tindie-tabs .wrap {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tindie-tabs .wrap::-webkit-scrollbar { display: none; }
+.tindie-tabs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 14px 13px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--muted-2);
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.tindie-tabs a svg { color: #a3adb1; }
+.tindie-tabs a:hover { color: var(--head); }
+.tindie-tabs a.active {
+  color: var(--head);
+  font-weight: 600;
+  border-bottom-color: var(--tq);
+}
+.tindie-tabs a.active svg { color: var(--tq); }
+@media (max-width: 560px) {
+  .tindie-tabs a { padding: 14px 10px 11px; font-size: 13.5px; gap: 6px; }
+  .tindie-tabs a svg { display: none; }
+}
+
+/* ---------------------------------------------------------------- page column + title band */
+.maker .tool-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+  min-height: 60vh;
+}
+.maker .tool-content > .tool-heading:first-child {
+  /* Full-bleed band like the live "Hardware Discovery" header, content stays in the column. */
+  background: var(--band);
+  box-shadow: 0 0 0 100vmax var(--band);
+  clip-path: inset(0 -100vmax);
+  padding: 30px 0 26px;
+  margin-bottom: 26px;
+}
+.maker .tool-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.maker .tool-heading h1 {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+  color: var(--head);
+  margin: 0 0 8px;
+}
+.maker .tool-heading p {
+  font-size: 15.5px;
+  color: var(--muted-2);
+  line-height: 1.55;
+  max-width: 760px;
+  text-wrap: balance;
+}
+.maker .eyebrow,
+.maker .tool-heading .eyebrow {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--tq-600);
+  margin-bottom: 8px;
+}
+.maker .heading-actions { gap: 10px; }
+@media (max-width: 760px) {
+  .maker .tool-heading { flex-direction: column; align-items: flex-start; }
+  .maker .tool-heading h1 { font-size: 26px; }
+  .maker .tool-heading p { font-size: 14.5px; }
+  .maker .tool-content { padding: 0 16px 40px; }
+}
+
+.maker .section-top { margin: 6px 0 14px; align-items: baseline; }
+.maker .section-top h2 { font-size: 21px; font-weight: 600; color: var(--head); letter-spacing: -0.2px; }
+.maker .section-top > span,
+.maker .section-top small { font-size: 13px; color: var(--muted); }
+.maker h2, .maker h3, .maker h4 { color: var(--head); }
+
+/* ---------------------------------------------------------------- buttons */
+.maker .btn {
+  border: 1px solid #d6dee0;
+  border-radius: 7px;
+  padding: 9px 16px;
+  min-height: 40px;
+  background: #fff;
+  color: var(--head);
+  font-size: 13.5px !important;
+  font-weight: 600;
+  font-family: inherit;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.maker .btn:hover:not(:disabled) { border-color: var(--tq); color: var(--tq-600); }
+.maker .btn.primary {
+  background: var(--tq);
+  border-color: var(--tq);
+  color: #fff;
+}
+.maker .btn.primary:hover:not(:disabled) { background: var(--tq-600); border-color: var(--tq-600); color: #fff; }
+.maker .btn.small { padding: 5px 12px; min-height: 32px; font-size: 12.5px !important; }
+.maker .btn.outline { border-color: var(--tq); color: var(--tq-600); }
+.maker .text-link,
+.maker .section-top a { color: var(--tq-600); font-weight: 600; font-size: 13.5px; }
+
+/* ---------------------------------------------------------------- inputs / search */
+.maker input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.maker select,
+.maker textarea {
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  border: 1px solid #d6dee0;
+  border-radius: 7px;
+  background: #fff;
+}
+.maker .search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #d6dee0;
+  border-radius: 9px;
+  padding: 4px 4px 4px 15px;
+  margin: 0 0 14px;
+  box-shadow: none;
+}
+.maker .search-bar:focus-within { border-color: var(--tq); }
+.maker .search-bar > svg { color: var(--muted); flex: none; }
+.maker .search-bar > input,
+.maker .search-bar input {
+  flex: 1;
+  border: 0 !important;
+  padding: 11px 6px;
+  font-size: 15px;
+  outline: none;
+  background: none;
+  min-width: 0;
+}
+.maker .search-bar .btn { min-height: 42px; }
+
+/* ---------------------------------------------------------------- notices, pills, status */
+.maker .notice {
+  border: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--muted-2);
+  border-radius: 9px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  padding: 12px 16px;
+}
+.maker .notice.error { border-color: #f3d3c8; background: #fff7f3; color: #b0532f; }
+.maker .notice.info { border-color: #cfeef1; background: #f1fbfc; color: var(--tq-dark); }
+.maker .local-note {
+  max-width: none;
+  margin: 16px 0 0;
+  font-size: 12.5px;
+  color: var(--muted-2);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.maker .source-pills span,
+.maker .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--tq-dark);
+  background: #f0f5f6;
+  border: 0;
+  padding: 3px 9px;
+  border-radius: 5px;
+}
+.maker .pill.warn { background: #fbf2dc; color: #9a6b08; }
+.maker .pill.muted { background: #f2f3f3; color: var(--muted-2); }
+.maker .source-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.maker .source-status span {
+  font-size: 12px;
+  color: var(--muted-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px 3px 8px;
+  background: #fff;
+}
+.maker .badge { font-size: 11px; border-radius: 5px; }
+
+/* ---------------------------------------------------------------- cards */
+.maker .part-card,
+.maker .project-card,
+.maker .candidate-panel,
+.maker .graph-embed,
+.maker .cad-preview,
+.maker .github-import,
+.maker .dropzone,
+.maker .bom-home {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.maker .part-card {
+  padding: 15px;
+  gap: 12px;
+  margin-bottom: 12px;
+  box-shadow: none;
+}
+.maker .part-card:hover { border-color: #cfe9ec; }
+.maker .part-card.selected { border: 1.5px solid var(--tq); background: #f7fdfd; }
+.maker .part-card h3 { font-size: 15px; font-weight: 600; color: var(--head); }
+.maker .part-card small { font-size: 12.5px; color: var(--muted-2); }
+.maker .part-card p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.maker .part-card .part-icon { background: #eef8f9; color: var(--tq-600); border-radius: 9px; }
+.maker .candidate-panel { padding: 20px; }
+.maker .candidate-panel h3 { font-size: 20px; font-weight: 700; color: var(--head); }
+.maker .candidate-panel > p { font-size: 13.5px; color: var(--muted-2); line-height: 1.6; }
+.maker .spec-list > div { border-bottom: 1px solid #f2f3f3; padding: 8px 0; font-size: 13px; }
+.maker .spec-list dt { color: var(--muted); font-size: 12.5px; }
+.maker .spec-list dd { color: var(--head); font-weight: 500; }
+
+.maker .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+@media (max-width: 1000px) { .maker .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .maker .catalog-grid { grid-template-columns: 1fr; } }
+.maker .project-card { overflow: hidden; display: flex; flex-direction: column; box-shadow: none; }
+.maker .project-card:hover { border-color: #cfe9ec; }
+.maker .project-info { padding: 14px 15px 15px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.maker .project-info small { font-size: 11px; font-weight: 600; letter-spacing: 0.4px; color: var(--tq-600); text-transform: uppercase; }
+.maker .project-info h3 { font-size: 15px; font-weight: 600; color: var(--head); line-height: 1.35; }
+.maker .project-info p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+.maker .dropzone { background: var(--band); border-style: dashed; border-color: #cfe9ec; }
+.maker .dropzone h2 { font-size: 21px; font-weight: 600; color: var(--head); }
+.maker .dropzone p { font-size: 14px; color: var(--muted-2); }
+
+.maker .graph-embed { background: radial-gradient(#d7e6e8 0.7px, transparent 0.7px) 0 0 / 18px 18px #fafdfd; }
+.maker .graph-embed-title b { font-size: 17px; color: var(--head); }
+.maker .graph-embed-title span,
+.maker .graph-embed-scope { font-size: 12.5px; color: var(--muted); }
+.maker .graph-open-label { background: var(--tq); border-radius: 7px; font-size: 13px; font-weight: 600; }
+.maker .graph-preview:hover .graph-open-label { background: var(--tq-600); }
+
+/* ---------------------------------------------------------------- dialogs (portals carry .maker) */
+dialog.maker { font-size: 14px; }
+.project-viewer-modal.maker > header,
+.datasheet-dialog.maker > header,
+.graph-dialog .graph-dialog-bar { border-bottom-color: var(--line); }
+.project-viewer-modal.maker,
+.datasheet-dialog.maker,
+.graph-dialog.maker { border-color: var(--line); border-radius: 12px; }
+.project-viewer-modal::backdrop,
+.datasheet-dialog::backdrop,
+.graph-dialog::backdrop { background: rgba(47, 52, 56, 0.55); }
+
+/* ---------------------------------------------------------------- small helpers used by new UI */
+.maker .muted { color: var(--muted); }
+.maker .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.maker .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+}
+.maker .chip small { color: var(--muted); font-weight: 400; }
+.maker .chip:hover { border-color: var(--tq); }
+.maker .chip.active { border-color: var(--tq); background: #effafb; color: var(--tq-dark); font-weight: 600; }
+.maker .field-source {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  vertical-align: middle;
+}
+.maker .design-row {
+  display: block;
+  padding: 10px 0;
+  border-bottom: 1px solid #f2f3f3;
+  font-size: 13.5px;
+  color: var(--head);
+  text-align: left;
+  width: 100%;
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.maker .design-row:hover b { color: var(--tq-600); }
+.maker .design-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.maker .thumb-placeholder {
+  height: 150px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #f3fbfc, #eef5f6);
+  color: #9fc9cf;
+  font-size: 12px;
+}
+.maker .thumb-placeholder b { color: var(--tq-dark); font-size: 13px; }
+
+/* ---------------------------------------------------------------- open hardware */
+.maker .family-browser { margin: 4px 0 18px; }
+.maker .family-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.maker .family-head b { font-size: 15px; color: var(--head); font-weight: 600; }
+.maker .family-head .muted { font-size: 12.5px; }
+.maker .kind-switch { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.maker .kind-switch .chip { padding: 4px 11px; font-size: 12.5px; }
+.maker .project-thumbnail { display: block; background: #f3f8f9; border-bottom: 1px solid var(--line); }
+.maker .project-thumbnail img { width: 100%; height: 150px; object-fit: cover; display: block; }
+.maker .project-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 6px; }
+.maker button.text-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.maker .design-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 16px; }
+.maker .design-bom { margin-top: 8px; }
+.maker .table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+.maker .design-bom table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.maker .design-bom th { text-align: left; font-weight: 600; color: var(--muted-2); background: var(--soft); padding: 10px 12px; font-size: 12.5px; }
+.maker .design-bom td { padding: 9px 12px; border-top: 1px solid #f2f3f3; vertical-align: top; }
+.maker .design-bom td:first-child { max-width: 260px; overflow-wrap: anywhere; color: var(--muted-2); }
+
+/* review fixes */
+.maker .candidate-panel .cad-preview h2 { font-size: 16px; }
+.maker .candidate-panel .cad-preview h3,
+.maker .cad-grid h3 { font-size: 13.5px; font-weight: 600; color: var(--head); margin-bottom: 8px; }
+.maker .thumb-placeholder { height: 120px; }
+.maker .project-thumbnail img { height: 120px; }
+.maker .graph-controls { display: flex; align-items: center; gap: 8px; }
+.maker .project-thumbnail { height: 120px; display: block; background: #f3f8f9; }
+.maker .project-thumbnail img { object-fit: cover; padding: 0; }
+.maker .project-thumbnail .thumb-placeholder { width: 100%; }
+/* A tool heading nested inside the viewer (e.g. the BOM workbench) is a section title, not a page title. */
+.maker .viewer-workspace .tool-heading h1,
+.maker .project-viewer-modal .viewer-workspace .tool-heading h1 { font-size: 22px; }
+.maker .viewer-workspace .tool-heading p { font-size: 13.5px; }

@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import PartDetailsModal from "./PartDetailsModal";
 import type { GraphNode } from "@/lib/maker/component-graph";
 import type { Part } from "@/lib/maker/types";
-import { partFamily } from "@/lib/maker/part-family";
 const cache = new Map<string, { until: number; parts: Part[] }>();
 export default function FamilyVariants({ node }: { node: GraphNode }) {
   const [lookup, setLookup] = useState<string | null>(null);
@@ -19,20 +18,17 @@ export default function FamilyVariants({ node }: { node: GraphNode }) {
       setStatus("");
       return;
     }
-    fetch("/api/maker/parts?q=" + encodeURIComponent(node.label), {
+    // node.id is the knowledge graph's family key: a normalised part-number prefix (AMS1117-3.3 → AMS111733).
+    fetch("/api/maker/parts?q=" + encodeURIComponent(node.id), {
       signal: ac.signal,
     })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok) throw Error(d.error || "Catalog unavailable");
-        const rows: Part[] = (d.items || []).filter((p: Part) => {
-          const f = partFamily(p.mpn, p.manufacturer);
-          return (
-            f.family === node.label.toUpperCase() &&
-            (!node.manufacturer ||
-              f.manufacturer.toUpperCase() === node.manufacturer.toUpperCase())
-          );
-        });
+        const key = node.id.toUpperCase();
+        const rows: Part[] = (d.items || []).filter((p: Part) =>
+          p.mpn.toUpperCase().replace(/[^A-Z0-9]/g, "").startsWith(key),
+        );
         if (ac.signal.aborted) return;
         setParts(rows);
         const unavailable = (d.sources || []).filter(
@@ -40,7 +36,7 @@ export default function FamilyVariants({ node }: { node: GraphNode }) {
         );
         setStatus(
           unavailable.length
-            ? "Some catalog sources are unavailable. Showing BOM records and available matches."
+            ? "The parts database is unavailable right now."
             : "",
         );
         if (!unavailable.length) {
@@ -50,7 +46,7 @@ export default function FamilyVariants({ node }: { node: GraphNode }) {
       })
       .catch((e) => {
         if (!ac.signal.aborted)
-          setStatus(e.message + " — BOM variants remain available.");
+          setStatus(e.message);
       });
     return () => ac.abort();
   }, [node.id, node.label, node.manufacturer]);
@@ -93,8 +89,8 @@ export default function FamilyVariants({ node }: { node: GraphNode }) {
         MPN variants <span>({rows.length})</span>
       </h3>
       <p className="graph-hint">
-        {node.familyRule}. Variants found in loaded BOMs and returned catalog
-        matches; not an exhaustive manufacturer list.
+        {node.familyRule}. Part numbers in the Tindie parts database that belong
+        to this family; not an exhaustive manufacturer list.
       </p>
       {status && (
         <p className="graph-hint" role="status">

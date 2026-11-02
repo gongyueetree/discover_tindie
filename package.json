@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "node scripts/dev-preview.mjs",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -12,7 +12,10 @@
     "db:seed": "tsx scripts/seed.ts",
     "reset-admin": "tsx scripts/reset-admin.ts",
     "test:maker": "node --import tsx scripts/maker-checks.ts",
-    "test:maker:live": "node --conditions=react-server --import tsx scripts/maker-live-checks.ts"
+    "test:partdata": "node --conditions=react-server --import tsx scripts/partdata-checks.ts",
+    "build:kicad-index": "node scripts/build-kicad-index.mjs",
+    "test:maker:api": "node --conditions=react-server --import tsx scripts/maker-api-checks.ts",
+    "test": "node scripts/run-all-checks.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "1.4.2",

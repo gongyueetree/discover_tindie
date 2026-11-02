@@ -5,6 +5,14 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import type { GraphData } from "@/lib/maker/component-graph";
+export const KIND_COLORS: Record<string, string> = {
+  IC: "#22b8c4",
+  Discrete: "#f2762e",
+  Passive: "#8bc34a",
+  Electromechanical: "#7b8fd6",
+  "Crystal / oscillator": "#c27ad6",
+  Other: "#9aa6ab",
+};
 const FullGraph = dynamic(() => import("./ComponentGraph"), {
   ssr: false,
   loading: () => <p>Opening graph…</p>,
@@ -146,7 +154,7 @@ export default function GraphEmbed({
           <div className="graph-embed-title">
             <b>Discover how component families connect</b>
             <span>
-              From Explore circuits project BOMs{mpn ? " · " + mpn : ""}
+              From open-source designs in the Tindie parts database{mpn ? " · " + mpn : ""}
             </span>
           </div>
           {!data ? (
@@ -162,13 +170,12 @@ export default function GraphEmbed({
                   </button>
                 </>
               ) : (
-                <p>Reading project BOMs and calculating relationships…</p>
+                <p>Loading component relationships…</p>
               )}
             </div>
           ) : !data.nodes.length ? (
             <div className="graph-embed-state">
-              No identified components in the loaded BOMs. No synthetic
-              relationships are shown.
+              No relationship data for this part yet.
             </div>
           ) : (
             <button
@@ -207,7 +214,7 @@ export default function GraphEmbed({
                               Math.max(...data.nodes.map((n) => n.count)),
                           )
                       }
-                      fill={n.identity === "BOM MPN" ? "#129eae" : "#ed995b"}
+                      fill={KIND_COLORS[n.identity] || "#9aa6ab"}
                       stroke={i === focus ? "#f2b04f" : "white"}
                       strokeWidth={i === focus ? 5 : 2}
                     />
@@ -234,9 +241,9 @@ export default function GraphEmbed({
           )}
           {data && (
             <p className="graph-embed-scope">
-              {data.scope.projects} projects · {data.nodes.length} visible
-              families · {data.scope.failed} BOMs unavailable · Partial
-              catalogue statistics
+              {data.scope.projects.toLocaleString()} designs analysed ·{" "}
+              {data.nodes.length} families shown · same-board co-occurrence
+              {data.scope.sourceDate ? " · " + data.scope.sourceDate.slice(0, 10) : ""}
             </p>
           )}
         </>
@@ -265,7 +272,7 @@ export default function GraphEmbed({
               <p role="status">
                 {error ||
                   (data
-                    ? "No related components found in available project BOMs."
+                    ? "No related components found."
                     : "Loading related components…")}
               </p>
             )}

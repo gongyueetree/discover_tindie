@@ -298,12 +298,21 @@ function Drawing({
     </>
   );
 }
-export default function CadPreview({ mpn }: { mpn: string }) {
+type Side = { preview?: Preview | null; reason?: string; source?: string; library?: string };
+const REASON: Record<string, string> = {
+  no_symbol_in_database: "No symbol recorded for this part",
+  no_footprint_in_database: "No footprint recorded for this part",
+  not_in_official_kicad_library: "Not in the official KiCad library",
+  not_previewable: "Library file could not be drawn",
+};
+export default function CadPreview({ partId, mpn }: { partId: string; mpn: string }) {
   const [selectedPin, setSelectedPin] = useState("");
-  useEffect(() => setSelectedPin(""), [mpn]);
+  useEffect(() => setSelectedPin(""), [partId]);
   const [data, setData] = useState<{
-      symbol?: { preview?: Preview };
-      footprint?: { preview?: Preview };
+      symbol?: Side;
+      footprint?: Side;
+      model?: { path: string; revision: string } | null;
+      revision?: string;
     } | null>(null),
     [error, setError] = useState(""),
     [model, setModel] = useState<InputAsset | null>(null),
@@ -317,7 +326,7 @@ export default function CadPreview({ mpn }: { mpn: string }) {
     setModelNote("");
     setBusy(false);
     const ac = new AbortController();
-    fetch("/api/maker/cad/" + encodeURIComponent(mpn), { signal: ac.signal })
+    fetch("/api/maker/cad/" + encodeURIComponent(partId), { signal: ac.signal })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok) throw Error(d.error);
@@ -330,28 +339,26 @@ export default function CadPreview({ mpn }: { mpn: string }) {
       ac.abort();
       controller.current?.abort();
     };
-  }, [mpn]);
+  }, [partId]);
   async function loadModel() {
+    if (!data?.model) return;
     const ac = new AbortController();
     controller.current = ac;
     setBusy(true);
-    setModelNote("Loading source model…");
+    setModelNote("Loading the official KiCad 3D model…");
     try {
       const r = await fetch(
-        "/api/maker/cad/" + encodeURIComponent(mpn) + "/model",
+        "/api/models/kicad?" + new URLSearchParams({ path: data.model.path, revision: data.model.revision }),
         { signal: ac.signal },
       );
-      if (!r.ok) throw Error((await r.json()).error);
+      if (!r.ok) throw Error(r.status === 404 ? "The KiCad library has no 3D model for this footprint." : "3D model unavailable right now.");
       const bytes = new Uint8Array(await r.arrayBuffer());
       if (!ac.signal.aborted) {
-        setModel({
-          path: mpn + "." + (r.headers.get("X-Model-Format") || "step"),
-          bytes,
-        });
+        setModel({ path: data.model.path.split("/").pop() || mpn + ".step", bytes });
         setModelNote("");
       }
     } catch (e) {
-      if (!ac.signal.aborted) setModelNote(String(e));
+      if (!ac.signal.aborted) setModelNote(e instanceof Error ? e.message : String(e));
     } finally {
       if (!ac.signal.aborted) setBusy(false);
     }
@@ -367,11 +374,18 @@ export default function CadPreview({ mpn }: { mpn: string }) {
     padIds.size &&
     ([...pinIds].some((p) => !padIds.has(p)) ||
       [...padIds].some((p) => !pinIds.has(p)));
-  if (!symbol && !footprint) return null;
+  if (error) return <p className="notice">CAD preview unavailable: {error}</p>;
+  if (!data) return <p className="muted">Loading symbol and footprint…</p>;
+  if (!symbol && !footprint)
+    return (
+      <p className="notice">
+        No CAD preview: {REASON[data.symbol?.reason || ""] || "no symbol"}; {REASON[data.footprint?.reason || ""]?.toLowerCase() || "no footprint"}.
+      </p>
+    );
   return (
     <section id="component-cad" className="cad-preview">
       <div className="section-top">
-        <h2>CAD preview · {mpn}</h2>
+        <h2>CAD preview</h2>
         {selectedPin && (
           <span role="status">Selected pin / pad: {selectedPin}</span>
         )}
@@ -380,7 +394,6 @@ export default function CadPreview({ mpn }: { mpn: string }) {
           {footprint ? "Footprint · " : ""}3D
         </span>
       </div>
-      {error && <p className="notice error">{error}</p>}
       <div
         className="cad-grid"
         style={{
@@ -413,19 +426,27 @@ export default function CadPreview({ mpn }: { mpn: string }) {
             <AssemblyScene asset={model} library />
           ) : (
             <div className="cad-model-empty">
-              <p>Inspect the source STEP / VRML model.</p>
-              <button
-                className="btn"
-                onClick={() => void loadModel()}
-                disabled={busy}
-              >
-                {busy ? "Loading…" : "Load 3D preview"}
-              </button>
+              {data.model ? (
+                <>
+                  <p>Official KiCad STEP model for this footprint.</p>
+                  <button className="btn" onClick={() => void loadModel()} disabled={busy}>
+                    {busy ? "Loading…" : "Load 3D preview"}
+                  </button>
+                </>
+              ) : (
+                <p>No 3D model is referenced by this footprint.</p>
+              )}
               <p>{modelNote}</p>
             </div>
           )}
         </article>
       </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {[data.symbol?.library, data.footprint?.library].filter(Boolean).join(" · ")} — official KiCad {data.revision} libraries,
+        drawn with the eelib CAD preview engine.
+        {!symbol && data.symbol?.reason ? ` Symbol: ${REASON[data.symbol.reason] || data.symbol.reason}.` : ""}
+        {!footprint && data.footprint?.reason ? ` Footprint: ${REASON[data.footprint.reason] || data.footprint.reason}.` : ""}
+      </p>
       {!!mismatch && (
         <p className="notice">
           Symbol pin numbers and footprint pad numbers differ. Verify the CAD
