@@ -312,6 +312,18 @@ function nodeOf(id: string, label: string, manufacturer: string | null, kind: st
  * - no focus: the most common IC families, linked where they co-occur with each other.
  */
 const MODULE_MIN_ICS = 8;
+/**
+ * Families tagged "ic" from their U designator that are not chips: display / sensor boards and
+ * other modules ("ST7789_1.54_240x240", "SSD1306 OLED module"), or a library symbol name rather
+ * than a part number (no manufacturer and an underscore).
+ */
+const MODULE_WORDS = /\b(lcd|oled|tft|e-?paper|e-?ink|display|screen|module|breakout|board|shield|header|connector)\b/i;
+function notAChip(f: { label?: string; family?: string; manufacturer?: string | null }) {
+  const label = String(f.label || f.family || "");
+  if (MODULE_WORDS.test(label.replace(/[_-]/g, " "))) return true;
+  if (/\d+\s*[x×]\s*\d+/i.test(label) && /\d\.\d/.test(label)) return true; // 1.54" 240x240 panels
+  return !String(f.manufacturer || "").trim() && label.includes("_");
+}
 
 export async function kgGraph(focus: string, visitor: string, module = ""): Promise<GraphData> {
   const snap = await pdGet(`${KG}/snapshots/current`, {}, visitor);
@@ -352,7 +364,7 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
     // nothing about the module. Show ICs; only when a module has few, add discretes / crystals. Never passives.
     const rank = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(module)}/families`, { limit: 200 }, visitor);
     const all: any[] = rank.data.items || [];
-    const ics = all.filter((f) => f.kind === "ic");
+    const ics = all.filter((f) => f.kind === "ic" && !notAChip(f));
     const fill = all.filter((f) => f.kind === "discrete" || f.kind === "crystal");
     const items = [...ics.slice(0, 20), ...(ics.length < MODULE_MIN_ICS ? fill.slice(0, MODULE_MIN_ICS - ics.length) : [])];
     for (const f of items) add(node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));

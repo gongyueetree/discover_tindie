@@ -42,6 +42,8 @@ const routes: Record<string, (c: Call) => unknown> = {
   "/api/kg/v1/rankings/functions/mcu/families": () => ({
     data: { items: [{ family: "CRCW060310K0", label: "CRCW060310K0FKEA", manufacturer: "Vishay", kind: "passive", adoption_count: 15 },
       { family: "RP2040", label: "RP2040", manufacturer: "树莓派", kind: "ic", adoption_count: 12 }, { family: "BSS138", label: "BSS138", manufacturer: "onsemi", kind: "discrete", adoption_count: 10 },
+      { family: "ST7789154240X240", label: "ST7789_1.54_240x240", manufacturer: null, kind: "ic", adoption_count: 9 },
+      { family: "SSD1306", label: "SSD1306 OLED module", manufacturer: "Solomon Systech", kind: "ic", adoption_count: 9 },
       { family: "W25Q128", label: "W25Q128JVSIQ", manufacturer: "Winbond", kind: "ic", adoption_count: 9 }] },
     meta: { denominator_count: 20, pagination: { total: 2 } },
   }),
@@ -125,7 +127,7 @@ async function main() {
   const { GET: graphGet } = await import("../src/app/api/maker/graph/route");
   r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=mcu", { headers: { "x-forwarded-for": "203.0.113.9" } }));
   d = await r.json();
-  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128", "BSS138"], "ICs first, passives never; discretes only fill a module with few ICs");
+  assert.deepEqual(d.nodes.map((n: any) => n.id), ["RP2040", "W25Q128", "BSS138"], "ICs first, passives and display modules never; discretes only fill a module with few ICs");
   assert.equal(d.edges.length, 1);
   assert.deepEqual(d.scope.module, { id: "mcu", designs: 20, items: [
     { family: "RP2040", label: "RP2040", manufacturer: "Raspberry Pi", count: 12 },
