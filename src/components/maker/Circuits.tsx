@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, Boxes, CircuitBoard, ExternalLink, FileSpreadsheet, Github, ImageOff, Search, Star, Upload } from "lucide-react";
+import { ArrowRight, BadgeCheck, Boxes, CircuitBoard, ExternalLink, FileSpreadsheet, Github, ImageOff, Search, Star, Upload } from "lucide-react";
 import ProjectViewerModal, { type ProjectRequest } from "./ProjectViewerModal";
 import { ToolHeading } from "./ToolShell";
 
@@ -17,6 +17,7 @@ type Design = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  vendor?: string | null;
   sourceUrl: string;
   license: string | null;
   stars: number | null;
@@ -24,6 +25,7 @@ type Design = {
   partCount: number;
   summary: string | null;
   coverImageUrl?: string | null;
+  boardPreview?: boolean;
 };
 type ModuleNode = { id: string; parent: string | null; name: string; depth: number; minor: boolean; children: ModuleNode[] };
 type Listing = { items: Design[]; total: number; family?: string; widened?: boolean; approximate?: boolean };
@@ -151,7 +153,7 @@ export default function Circuits() {
       <ToolHeading
         eyebrow="Open hardware"
         title="Learn from real designs"
-        description="Open-source boards with full KiCad, EAGLE, Altium or EasyEDA / JLCEDA files, organised by circuit module. Open one to explore its schematic, PCB, 3D view and BOM — or open your own files."
+        description="Manufacturers' reference designs and open-source boards with full KiCad, EAGLE, Altium or EasyEDA / JLCEDA files, organised by circuit module. Open one to explore its schematic, PCB, 3D view and BOM — or open your own files."
         actions={
           <>
             <button className="btn primary" onClick={() => upload.current?.click()}>
@@ -297,8 +299,7 @@ export default function Circuits() {
           <div className="section-top">
             <h2>{heading}</h2>
             <span>
-              {list ? `${list.total.toLocaleString()} ${list.total === 1 ? "design" : "designs"}` : ""} · full CAD files · 1★ or more ·
-              most starred first
+              {list ? `${list.total.toLocaleString()} ${list.total === 1 ? "design" : "designs"}` : ""} · vendor reference designs · open source with full CAD files and 1★ or more
             </span>
           </div>
           <ul className="atlas-grid">
@@ -332,8 +333,10 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
   return (
     <li className="atlas-card">
       <button className="atlas-card-pic" onClick={onOpen} tabIndex={-1} aria-hidden>
-        {d.coverImageUrl ? (
-          <img src={d.coverImageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
+        {d.kind === "open_source" ? (
+          <CardPicture d={d} />
+        ) : d.kind === "vendor" ? (
+          <CardPicture d={d} vendor />
         ) : (
           <span className="atlas-card-nopic">
             <ImageOff size={20} aria-hidden />
@@ -342,6 +345,11 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
         )}
       </button>
       <div className="atlas-card-body">
+        {d.kind === "vendor" && (
+          <span className="vendor-badge" title="Published by the manufacturer">
+            <BadgeCheck size={13} aria-hidden /> Reference design{d.vendor ? ` · ${d.vendor}` : ""}
+          </span>
+        )}
         <div>
           <button className="atlas-card-name" onClick={onOpen}>
             {d.name}
@@ -364,7 +372,7 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
           )}
         </div>
         <div className="atlas-card-foot">
-          <span>{d.license ? `Licence: ${d.license}` : "Licence not stated"}</span>
+          <span>{d.kind === "vendor" ? "Manufacturer's terms" : d.license ? `Licence: ${d.license}` : "Licence not stated"}</span>
           <span className="atlas-card-actions">
             {d.sourceUrl && (
               <a href={d.sourceUrl} target="_blank" rel="noreferrer" aria-label={"Source of " + d.name}>
@@ -378,5 +386,59 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * A design's picture: its title image (the repository's social image or README image), else the
+ * PCB preview the parts database drew from the design's board, else "No preview". When the
+ * design list does not carry pictures (older parts database), the card asks once it is visible.
+ */
+function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
+  const board = d.boardPreview ? `/api/maker/circuits/${d.id}/board.svg` : null;
+  // Vendor designs: the picture their own page publishes (looked up on the server).
+  const [sources, setSources] = useState<string[] | null>(
+    vendor || d.coverImageUrl === undefined ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
+  );
+  const [index, setIndex] = useState(0);
+  const host = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (sources !== null || !host.current) return;
+    const el = host.current;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      fetch(`/api/maker/circuits/${d.id}/cover`)
+        .then((r) => (r.ok ? r.json() : { url: null }))
+        .then((x) => setSources(x.url ? [x.url] : []))
+        .catch(() => setSources([]));
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sources, d.id]);
+  const src = sources?.[index];
+  if (src)
+    return (
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className={src.endsWith("/board.svg") ? "atlas-card-board" : undefined}
+        onError={() => setIndex((i) => i + 1)}
+      />
+    );
+  if (vendor)
+    return (
+      <span className="atlas-card-nopic atlas-card-vendorpic" ref={host}>
+        <BadgeCheck size={22} aria-hidden />
+        {d.vendor || "Manufacturer"}
+      </span>
+    );
+  return (
+    <span className="atlas-card-nopic" ref={host}>
+      <ImageOff size={20} aria-hidden />
+      {sources === null ? "Loading preview…" : "No preview"}
+    </span>
   );
 }

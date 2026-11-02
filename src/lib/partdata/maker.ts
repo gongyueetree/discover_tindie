@@ -98,26 +98,33 @@ export type DesignCard = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  /** Vendor reference designs: the manufacturer that publishes it (from the source link's site). */
+  vendor?: string | null;
   sourceUrl: string;
   license: string | null;
   stars: number | null;
   edaTool: string | null;
   partCount: number;
   summary: string | null;
+  /** Title image: null = none; undefined = the parts database did not say (older API — look it up per design). */
   coverImageUrl?: string | null;
+  /** A PCB preview generated from the design's board file is available at /api/maker/circuits/{id}/board.svg. */
+  boardPreview?: boolean;
 };
 function toDesign(d: any): DesignCard {
   return {
     id: String(d.id),
     name: String(d.name || "Untitled design"),
     kind: d.kind === "vendor" ? "vendor" : "open_source",
+    vendor: d.kind === "vendor" ? vendorName(d.vendor, d.source_url) : null,
     sourceUrl: link(d.source_url) || "",
     license: d.license || null,
     stars: typeof d.stars === "number" ? d.stars : null,
     edaTool: d.eda_tool || null,
     partCount: Number(d.part_count) || 0,
     summary: d.summary ? englishText(d.summary) : null,
-    coverImageUrl: link(d.cover_image_url) || null,
+    coverImageUrl: "cover_image_url" in d ? link(d.cover_image_url) || null : undefined,
+    boardPreview: !!d.board_preview,
   };
 }
 
@@ -131,8 +138,34 @@ export const DESIGN_RULES = {
   // Every format the viewer parses: KiCad, Eagle, Altium Designer, EasyEDA / JLCEDA (standard and Pro).
   eda: ["kicad", "eagle", "altium", "easyeda", "jlcpro", "jlc", "jlceda", "lceda"],
 };
+// Vendor reference designs are trusted as published by the manufacturer: always listed, without a star rule.
 const keep = (d: DesignCard) =>
-  d.kind === "open_source" && (d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase());
+  d.kind === "vendor" ||
+  ((d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase()));
+
+/** Manufacturer sites → display names, for vendor reference designs. */
+const VENDOR_SITES: [RegExp, string][] = [
+  [/(^|\.)ti\.com(\.cn)?$/, "Texas Instruments"], [/(^|\.)(analog|maximintegrated|linear)\.com$/, "Analog Devices"],
+  [/(^|\.)st\.com(\.cn)?$/, "STMicroelectronics"], [/(^|\.)nxp\.com(\.cn)?$/, "NXP Semiconductors"],
+  [/(^|\.)microchip\.com$/, "Microchip Technology"], [/(^|\.)(infineon|cypress)\.com$/, "Infineon Technologies"],
+  [/(^|\.)onsemi\.com(\.cn)?$/, "onsemi"], [/(^|\.)renesas\.com$/, "Renesas Electronics"], [/(^|\.)espressif\.com$/, "Espressif Systems"],
+  [/(^|\.)silabs\.com$/, "Silicon Labs"], [/(^|\.)nordicsemi\.com$/, "Nordic Semiconductor"], [/(^|\.)rohm\.com(\.cn)?$/, "ROHM"],
+  [/(^|\.)toshiba[\w-]*\.(com|co\.jp)$/, "Toshiba"], [/(^|\.)(wch|wch-ic)\.(cn|com)$/, "WCH"], [/(^|\.)gigadevice\.com(\.cn)?$/, "GigaDevice"],
+  [/(^|\.)monolithicpower\.com$/, "Monolithic Power Systems"], [/(^|\.)richtek\.com$/, "Richtek"], [/(^|\.)diodes\.com$/, "Diodes Inc"],
+  [/(^|\.)vishay\.com$/, "Vishay"], [/(^|\.)murata\.com$/, "Murata"], [/(^|\.)sg-micro\.com$/, "SG Micro"], [/(^|\.)3peak\.com$/, "3PEAK"],
+  [/(^|\.)raspberrypi\.(com|org)$/, "Raspberry Pi"], [/(^|\.)arduino\.cc$/, "Arduino"], [/(^|\.)xilinx\.com$/, "AMD Xilinx"],
+  [/(^|\.)lattice(semi)?\.com$/, "Lattice Semiconductor"], [/(^|\.)intel\.com$/, "Intel"], [/(^|\.)skyworksinc\.com$/, "Skyworks"],
+  [/(^|\.)qorvo\.com$/, "Qorvo"], [/(^|\.)semtech\.com$/, "Semtech"], [/(^|\.)power\.com$/, "Power Integrations"],
+];
+function vendorName(given: unknown, url: unknown): string | null {
+  if (typeof given === "string" && given.trim()) return manufacturerEn(manufacturerCanonical(given.replace(/参考设计$/, "").trim()));
+  try {
+    const host = new URL(String(url)).hostname.replace(/^www\./, "");
+    return VENDOR_SITES.find(([re]) => re.test(host))?.[1] ?? host;
+  } catch {
+    return null;
+  }
+}
 
 type DesignFilter = { part?: string; mpn?: string; family?: string; function?: string };
 
@@ -453,4 +486,59 @@ export async function plannerParts(q: string, visitor: string) {
     ? rows.map(toPart)
     : (await Promise.allSettled(rows.slice(0, 12).map((x) => partDetail(x.id, visitor)))).flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
   return parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
+}
+
+/* ------------------------------------------------------------------ vendor design pictures */
+
+const vendorImages = new Map<string, { until: number; value: Promise<string | null> }>();
+
+/**
+ * A vendor reference design's picture: the og:image / twitter:image its own page publishes.
+ * Only for known manufacturer sites (VENDOR_SITES), HTTPS, no redirects off-site, 6 s, 1 MB;
+ * cached a day, misses included. Returns null when there is none.
+ */
+export function vendorImage(sourceUrl: string): Promise<string | null> {
+  const hit = vendorImages.get(sourceUrl);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (vendorImages.size > 500) vendorImages.clear();
+  const value = (async () => {
+    let u: URL;
+    try {
+      u = new URL(sourceUrl);
+    } catch {
+      return null;
+    }
+    const host = u.hostname.replace(/^www\./, "");
+    if (u.protocol !== "https:" || u.username || u.password || !VENDOR_SITES.some(([re]) => re.test(host))) return null;
+    try {
+      const r = await fetch(u, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(6000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; TindieDiscover/1.0)", Accept: "text/html" },
+      });
+      const finalHost = new URL(r.url).hostname.replace(/^www\./, "");
+      if (!r.ok || !VENDOR_SITES.some(([re]) => re.test(finalHost)) || !/html/i.test(r.headers.get("content-type") || "")) return null;
+      const reader = r.body?.getReader();
+      if (!reader) return null;
+      let html = "";
+      const dec = new TextDecoder();
+      while (html.length < 1_000_000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        html += dec.decode(value, { stream: true });
+        if (/<\/head>/i.test(html)) break;
+      }
+      await reader.cancel().catch(() => {});
+      const m =
+        html.match(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image)["'][^>]*content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+      if (!m) return null;
+      const img = new URL(m[1].replace(/&amp;/g, "&"), r.url);
+      return img.protocol === "https:" ? img.href : null;
+    } catch {
+      return null;
+    }
+  })();
+  vendorImages.set(sourceUrl, { until: Date.now() + 86_400_000, value });
+  return value;
 }

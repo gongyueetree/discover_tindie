@@ -1,26 +1,33 @@
-From 8ec717c27d66c8913013756f383d3613a901fb4b Mon Sep 17 00:00:00 2001
+From 347c028ae304d007e3bcda3d1de645e793473cb9 Mon Sep 17 00:00:00 2001
 From: gongyueetree <eelib0418@gmail.com>
 Date: Mon, 2 Nov 2026 05:31:22 +0000
-Subject: [PATCH] feat(pub_api): designs by circuit module, min_stars / eda
- filters, footprint in part lists
+Subject: [PATCH] feat(pub_api): designs by circuit module, filters, vendor
+ name, cover images and PCB previews, footprint in part lists
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-For Tindie Discover (Open hardware by module; only openable KiCad/Eagle designs with >=1 star;
-PCB planner lists only parts that have a footprint).
+For Tindie Discover (Open hardware by module with pictures; openable open-source designs with >=1
+star plus all vendor reference designs; PCB planner lists only parts that have a footprint).
 
 - GET /api/pub/v1/designs?function=<module id> (includes sub-modules, via oshw_bom_modules)
-- min_stars, eda (comma separated) filters applied before paging, so totals stay correct
+- min_stars, eda (comma separated) filters applied before paging, so totals stay correct; they
+  constrain open-source designs only — vendor reference designs are always kept
+- design list items carry cover_image_url (repo social image / README image), board_preview, and
+  vendor for vendor designs (from project_category, e.g. "TI 参考设计" -> "TI")
+- GET /api/pub/v1/designs/{id}/board.svg: the PCB preview oshw_cover generated (signed, CSP)
 - parts/search and parts/lookup items carry footprint (withheld when it has a pending conflict);
   with_footprint=1 returns only parts with a footprint
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018MWFKK7DmS3uJmhqWTQfJ4
 ---
- ezplm_pilot/pub_api.py | 69 ++++++++++++++++++++++++++++++++++++------
- tests/test_pub_api.py  | 39 ++++++++++++++++++++++++
- 2 files changed, 98 insertions(+), 10 deletions(-)
+ ezplm_pilot/pub_api.py | 109 +++++++++++++++++++++++++++++++++++------
+ tests/test_pub_api.py  |  56 +++++++++++++++++++++
+ 2 files changed, 150 insertions(+), 15 deletions(-)
 
 diff --git a/ezplm_pilot/pub_api.py b/ezplm_pilot/pub_api.py
-index 462918e..affe96f 100644
+index 462918e..ed00b0f 100644
 --- a/ezplm_pilot/pub_api.py
 +++ b/ezplm_pilot/pub_api.py
 @@ -25,7 +25,7 @@ from urllib.parse import quote
@@ -110,7 +117,51 @@ index 462918e..affe96f 100644
      db.commit()
      return reply({"items": items}, hdr, pagination={"limit": limit, "offset": offset, "has_more": len(rows) > limit and offset + limit < SEARCH["max_offset"] + SEARCH["max_limit"]})
  
-@@ -435,8 +468,10 @@ def _design_rows(db, bids: list[str]) -> list[dict]:
+@@ -393,7 +426,14 @@ def design_where():
+     return [OshwBom.group_lead.isnot(False), or_(OshwBom.parse_status == "succeeded", OshwBom.parse_status.is_(None), OshwBom.parse_status == "")]
+ 
+ 
+-def public_design(db, b: OshwBom, rs: RepoStat | None, n_items: int, full: bool = False) -> dict | None:
++def _board_previews(db, bids) -> set:
++    """有生成好的 PCB 预览图（oshw_cover.build）的设计。"""
++    from .staging import OshwCover
++    bids = list(bids)
++    return {b for (b,) in db.execute(select(OshwCover.bom_id).where(OshwCover.bom_id.in_(bids), OshwCover.svg_gz.isnot(None)))} if bids else set()
++
++
++def public_design(db, b: OshwBom, rs: RepoStat | None, n_items: int, full: bool = False, board_preview: bool = False) -> dict | None:
+     kind = _kind(b)
+     lic = (b.license or (rs.license if rs else "") or "").strip()
+     if kind == "other" or n_items < DESIGN_MIN_ITEMS or (kind == "open_source" and (not lic or lic.upper() in ("NOASSERTION", "OTHER") or (rs and rs.missing))):
+@@ -404,7 +444,11 @@ def public_design(db, b: OshwBom, rs: RepoStat | None, n_items: int, full: bool
+         src = b.repo
+     out = {"id": oid(db, "design", b.bom_id), "name": b.project_name, "kind": kind, "source_url": src, "license": lic or None,
+            "stars": b.stars if kind == "open_source" else None, "eda_tool": b.eda_tool or None, "part_count": n_items,
+-           "summary": (rs.description if rs else None) if kind == "open_source" else None}
++           "summary": (rs.description if rs else None) if kind == "open_source" else None,
++           "vendor": ((b.project_category or "").removesuffix("参考设计").strip() or None) if kind == "vendor" else None,
++           # 标题图（仓库自定义社交图 / README 首图）；没有时合作方可用 board.svg（工程 PCB 生成的预览）
++           "cover_image_url": (_url(rs.cover_url) if rs else None) if kind == "open_source" else None,
++           "board_preview": bool(board_preview) and kind == "open_source"}
+     if not full:
+         return out
+     if kind == "vendor":                                  # 厂商设计资料条款没审过：只给来源链接，不转发 BOM
+@@ -419,7 +463,6 @@ def public_design(db, b: OshwBom, rs: RepoStat | None, n_items: int, full: bool
+                      "manufacturer": it.manufacturer or None, "footprint": it.footprint or None,
+                      "part_id": oid(db, "part", pid) if pid in parts else None})
+     out["bom"] = rows
+-    out["cover_image_url"] = _url(rs.cover_url) if rs else None
+     return out
+ 
+ 
+@@ -430,13 +473,16 @@ def _design_rows(db, bids: list[str]) -> list[dict]:
+     rs = {r.repo: r for r in db.execute(select(RepoStat).where(RepoStat.repo.in_({b.gh_repo for b in boms if b.gh_repo}))).scalars()}
+     n = dict(db.execute(select(OshwItem.bom_id, func.count()).where(OshwItem.bom_id.in_([b.bom_id for b in boms]), OshwItem.key_norm.isnot(None))
+                         .group_by(OshwItem.bom_id)).all())
+-    out = [public_design(db, b, rs.get(b.gh_repo), n.get(b.bom_id, 0)) for b in boms]
++    previews = _board_previews(db, [b.bom_id for b in boms])
++    out = [public_design(db, b, rs.get(b.gh_repo), n.get(b.bom_id, 0), board_preview=b.bom_id in previews) for b in boms]
+     return sorted([x for x in out if x], key=lambda x: (x["kind"] != "open_source", -(x["stars"] or 0), x["name"] or ""))
  
  
  @router.get("/designs")
@@ -119,11 +170,11 @@ index 462918e..affe96f 100644
 +async def designs(part: str = "", mpn: str = "", family: str = "", function: str = "", min_stars: int = 0, eda: str = "",
 +                  limit: int = 10, offset: int = 0, ctx: dict = Depends(partner)):
 +    """用到某个物料（part=对外 ID）/ 型号（mpn）/ 器件族（family）/ 含某电路模块（function=模块 id，含子类）的参考设计。必须给其中一个。
-+    可选过滤（在分页之前做）：min_stars 最少 GitHub 星数（厂商设计没有星数，min_stars≥1 时不出）；eda 工具，逗号分隔（如 kicad,eagle）。"""
++    可选过滤（在分页之前做，只约束开源工程，厂商参考设计一律保留）：min_stars 最少 GitHub 星数；eda 工具，逗号分隔（如 kicad,eagle）。"""
      hdr = need(ctx, "designs:read")
      db = ctx["db"]
      limit, offset = max(1, min(limit, SEARCH["max_limit"])), max(0, min(offset, SEARCH["max_offset"]))
-@@ -450,9 +485,23 @@ async def designs(part: str = "", mpn: str = "", family: str = "", limit: int =
+@@ -450,9 +496,24 @@ async def designs(part: str = "", mpn: str = "", family: str = "", limit: int =
          snap = kg.current(db)
          f = family.removeprefix("fam:")
          bids = [d["design_id"] for d in kg.designs_of(db, snap, f, limit=500)[0]] if snap else []
@@ -133,26 +184,60 @@ index 462918e..affe96f 100644
 +        ids = {f} | {m for (m,) in db.execute(select(ModuleCategory.id).where(ModuleCategory.id.like(f + ".%")))}
 +        q = (select(OshwBom.bom_id).join(OshwBomModule, OshwBomModule.bom_id == OshwBom.bom_id)
 +             .where(OshwBomModule.module_id.in_(ids), *design_where()))
-+        if min_stars > 0:
-+            q = q.where(OshwBom.stars >= min_stars)
++        if min_stars > 0:                                   # 厂商参考设计没有星数，不受星数限制
++            q = q.where(or_(OshwBom.stars >= min_stars, OshwBom.gh_repo.is_(None)))
 +        bids = list(dict.fromkeys(b for (b,) in db.execute(q.order_by(OshwBom.stars.desc().nullslast()).limit(4000))))
      else:
 -        _err("bad_request", "要给 part、mpn 或 family 其中一个（型号至少 3 个字符）", 400)
 +        _err("bad_request", "要给 part、mpn、family 或 function 其中一个（型号至少 3 个字符）", 400)
      rows = _design_rows(db, bids[:2000])
++    # min_stars / eda 只约束开源工程：厂商参考设计（只给来源链接）一律保留
 +    if min_stars > 0:
-+        rows = [r for r in rows if (r["stars"] or 0) >= min_stars]
++        rows = [r for r in rows if r["kind"] == "vendor" or (r["stars"] or 0) >= min_stars]
 +    tools = {t.strip().lower() for t in eda.split(",") if t.strip()}
 +    if tools:
-+        rows = [r for r in rows if (r["eda_tool"] or "").lower() in tools]
++        rows = [r for r in rows if r["kind"] == "vendor" or (r["eda_tool"] or "").lower() in tools]
      db.commit()
      return reply({"items": rows[offset:offset + limit]}, hdr, pagination={"limit": limit, "offset": offset, "total": min(len(rows), SEARCH["max_offset"] + SEARCH["max_limit"])})
  
+@@ -467,13 +528,31 @@ async def design_detail(design_id: str, ctx: dict = Depends(partner)):
+         _err("not_found", "没有这个设计，或它没达到对外发布的要求", 404)
+     rs = db.get(RepoStat, b.gh_repo) if b.gh_repo else None
+     n = db.execute(select(func.count()).select_from(OshwItem).where(OshwItem.bom_id == b.bom_id, OshwItem.key_norm.isnot(None))).scalar() or 0
+-    data = public_design(db, b, rs, n, full=True)
++    data = public_design(db, b, rs, n, full=True, board_preview=bool(_board_previews(db, [b.bom_id])))
+     if not data:
+         _err("not_found", "没有这个设计，或它没达到对外发布的要求", 404)
+     db.commit()
+     return reply(data, hdr)
+ 
+ 
++@router.get("/designs/{design_id}/board.svg")
++async def design_board_svg(design_id: str, ctx: dict = Depends(partner)):
++    """设计的 PCB 预览图（SVG，由工程里的 PCB 生成：板框、铜、焊盘；不含丝印文字）。没有时 404。"""
++    import gzip
++    from fastapi.responses import Response
++    from .staging import OshwCover
++    hdr = need(ctx, "designs:read")
++    db = ctx["db"]
++    ref = resolve(db, design_id, "design")
++    b = db.execute(select(OshwBom).where(OshwBom.bom_id == ref, *design_where())).scalars().first() if ref else None
++    c = db.get(OshwCover, b.bom_id) if b and _kind(b) == "open_source" else None
++    if not c or not c.svg_gz:
++        _err("not_found", "这个设计没有 PCB 预览图", 404)
++    db.commit()
++    return Response(gzip.decompress(c.svg_gz), media_type="image/svg+xml",
++                    headers=hdr | {"Cache-Control": "private, max-age=86400", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
++
++
+ @router.get("/openapi.json", include_in_schema=False)
+ def openapi_doc():
+     """只含对外接口（/api/pub/v1 和 /api/kg/v1）的 OpenAPI 描述，不含后台页面。"""
 diff --git a/tests/test_pub_api.py b/tests/test_pub_api.py
-index 74a32f2..a99638c 100644
+index 74a32f2..ac7293f 100644
 --- a/tests/test_pub_api.py
 +++ b/tests/test_pub_api.py
-@@ -131,3 +131,42 @@ def test_settings_test_output_survives_ampersand(client, monkeypatch):
+@@ -131,3 +131,59 @@ def test_settings_test_output_survives_ampersand(client, monkeypatch):
      monkeypatch.setattr(settings, "key_source", lambda: Key())
      page = client.post("/settings/test").text
      assert "pageSize=1" in page and "API Key 接口" in page and "hits" in page
@@ -181,10 +266,27 @@ index 74a32f2..a99638c 100644
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx"})
 +    assert set(names(r)) == {"RS485 board", "Zero-star board", "TI design"}            # 子类 pfx.ldo 的设计也算
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "min_stars": "1"})
-+    assert names(r) == ["RS485 board"] and r.json()["meta"]["pagination"]["total"] == 1   # 0 星、厂商设计（无星数）不出
++    assert names(r) == ["RS485 board", "TI design"] and r.json()["meta"]["pagination"]["total"] == 2   # 0 星的不出；厂商设计不受星数限制
++    vend = next(x for x in r.json()["data"]["items"] if x["kind"] == "vendor")
++    assert vend["vendor"] == "TI" and vend["stars"] is None
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "eda": "kicad,eagle"})
-+    assert set(names(r)) == {"RS485 board", "Zero-star board"}
++    assert set(names(r)) == {"RS485 board", "Zero-star board", "TI design"}
 +    assert call(client, kid, sec, "GET", "/api/pub/v1/designs", {}).status_code == 400
++    # 标题图 / PCB 预览：列表里就有；board.svg 签名可取，没有时 404
++    import gzip
++    from ezplm_pilot.staging import OshwCover
++    db.query(RepoStat).filter(RepoStat.repo == "acme/rs485").update({"cover_url": "https://example.com/rs485.png"})
++    db.merge(OshwCover(bom_id="pd-4", svg_gz=gzip.compress(b"<svg xmlns='http://www.w3.org/2000/svg'/>")))
++    db.commit()
++    items = {x["name"]: x for x in call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx"}).json()["data"]["items"]}
++    assert items["RS485 board"]["cover_image_url"] == "https://example.com/rs485.png" and items["RS485 board"]["board_preview"] is False
++    assert items["Zero-star board"]["board_preview"] is True and items["TI design"]["cover_image_url"] is None
++    svg = call(client, kid, sec, "GET", f"/api/pub/v1/designs/{items['Zero-star board']['id']}/board.svg")
++    assert svg.status_code == 200 and svg.headers["content-type"].startswith("image/svg+xml") and b"<svg" in svg.content
++    assert call(client, kid, sec, "GET", f"/api/pub/v1/designs/{items['RS485 board']['id']}/board.svg").status_code == 404
++    assert client.get(f"/api/pub/v1/designs/{items['Zero-star board']['id']}/board.svg").status_code == 401     # 要签名
++    db.query(OshwCover).filter(OshwCover.bom_id == "pd-4").delete()
++    db.commit()
 +    s = call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485"}).json()["data"]["items"]
 +    by = {x["mpn"]: x for x in s}
 +    assert by["PUBX485ECSA+"]["footprint"] is None                                      # 封装有未决冲突：列表里也不给

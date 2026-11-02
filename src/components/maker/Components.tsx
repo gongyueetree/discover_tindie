@@ -12,6 +12,7 @@ type DesignCard = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  vendor?: string | null;
   stars: number | null;
   license: string | null;
   partCount: number;
@@ -332,7 +333,11 @@ export default function Components() {
                   <a key={r.id} className="design-row" href={"/tools/circuits?design=" + encodeURIComponent(r.id)}>
                     <b>{r.name}</b>
                     <small>
-                      {r.kind === "vendor" ? "Vendor reference design" : `Open source · ${r.license || "licence not stated"}`}
+                      {r.kind === "vendor" ? (
+                        <span className="vendor-badge">Reference design{r.vendor ? ` · ${r.vendor}` : ""}</span>
+                      ) : (
+                        `Open source · ${r.license || "licence not stated"}`
+                      )}
                       {r.stars !== null ? (
                         <>
                           {" · "}

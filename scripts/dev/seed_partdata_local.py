@@ -120,7 +120,9 @@ def main():
             if k in ids:
                 db.add(OshwMatch(part_id=ids[k], item_id=item_id, bom_id=bid, how="mpn"))
 
-    db.add(RepoStat(repo=ZF, stars=97, license="MIT", description="Z-FIGHTER: a Z80 homebrew computer with peripherals (KiCad)."))
+    # Title image as partdata's oshw_stars records it (the README's first image, pinned to the commit).
+    db.add(RepoStat(repo=ZF, stars=97, license="MIT", description="Z-FIGHTER: a Z80 homebrew computer with peripherals (KiCad).",
+                    cover_url=f"https://raw.githubusercontent.com/{ZF}/{ZF_COMMIT}/media/case_io.jpg"))
     for bid, name, subdir, items in REAL:
         add_design(bid, name, items, repo=ZF, commit=ZF_COMMIT, subdir=subdir, stars=97)
     add_design("fx-vendor-ti", "TI RS-232 transceiver reference design", [("U1", "MAX202ECDR"), ("U2", "TPS2061CDBVT"), ("U3", "LM358DR"),
@@ -149,6 +151,20 @@ def main():
                     mods.add(m)
         for m in mods:
             db.add(OshwBomModule(bom_id=b.bom_id, project_id=b.project_id, module_id=m, n_items=1))
+    db.commit()
+    # PCB previews as partdata's oshw_cover draws them, from a local clone of the real repository when present.
+    import gzip
+    from ezplm_pilot import oshw_cover
+    from ezplm_pilot.staging import OshwCover
+    clone = os.environ.get("ZF_CLONE", "/home/user/tangent3d/z-fighter")
+    db.query(OshwCover).filter(OshwCover.bom_id.like("fx-%")).delete(synchronize_session=False)
+    for bid, pcb in (("fx-zf-main", "hardware/mainboard/kicad/Z-FIGHTER_Mainboard.kicad_pcb"),
+                     ("fx-zf-usb", "hardware/peripherals/usb_serial_power_module/KiCad/usb_serial_power_module.kicad_pcb")):
+        path = os.path.join(clone, pcb)
+        if os.path.exists(path):
+            svg = oshw_cover.render(os.path.basename(pcb), open(path, "rb").read())
+            if svg:
+                db.add(OshwCover(bom_id=bid, svg_gz=gzip.compress(svg.encode())))
     db.commit()
     print(kg.build(db, log=lambda *a: None, min_pair_family_n=2))
     db.query(PartnerKey).filter(PartnerKey.name == "tindie-local").delete()

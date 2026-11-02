@@ -139,8 +139,14 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - PCB planner 器件列表：每项显示型号 · 厂商、两行简介、封装和分类；**只列出有封装且封装在 KiCad 官方库里的器件**。
 
 **设计列表规则**（元器件页"使用该器件的设计"、Open hardware、图谱里的设计都适用）
-- 只显示有完整工程文件、浏览器能打开的设计：KiCad、EAGLE、Altium、EasyEDA / JLCEDA。
-- 至少 1 颗 GitHub 星。厂商参考设计没有星数，不再列出。
+- **厂商参考设计**：可信，没有星数也全部显示，卡片上用金色标记"Reference design · 厂商名"。
+  - 厂商名优先取 partdata 返回的 `vendor`（来自它的工程分类，如"TI 参考设计"），缩写自动展开为全称；没有时按来源网站识别（ti.com → Texas Instruments 等）。
+  - 厂商设计只提供来源链接，不显示 BOM（partdata 的许可规则）。
+- **开源工程**：只显示有完整工程文件、浏览器能打开的设计（KiCad、EAGLE、Altium、EasyEDA / JLCEDA），且至少 1 颗 GitHub 星。
+- **标题图**：
+  - 开源工程依次尝试三种：① partdata 记录的标题图（仓库自定义社交图或 README 首图）；② partdata 用工程 PCB 生成的预览图（`board.svg`，经本站签名转发）；③ 都没有时显示 "No preview"。
+  - 厂商参考设计取厂商页面自己发布的预览图（`og:image`），只请求已知厂商网站、只走 HTTPS、缓存一天；没有时显示厂商名。
+  - partdata 未打补丁时，设计列表里没有图片字段，每张卡片滚动到可见时再单独查询（服务端缓存）。
 
 **CAD 格式**
 - 解析引擎换成 eelib 最新版本（refir / canon-eda-ir **1.7.2**）。原型里带的是较旧的版本。
@@ -156,7 +162,9 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 **需要 partdata 配合的部分**：`docs/partdata/0001-partner-filters.patch`
 - 这是给 ezplm_partdata 的补丁（含测试），需要你审核后在 partdata 仓库应用并部署。内容：
   - `designs?function=<模块 id>`：按电路模块查设计，包含子模块。
-  - `min_stars`、`eda`：在分页**之前**过滤，所以数量准确。
+  - `min_stars`、`eda`：在分页**之前**过滤，所以数量准确；只约束开源工程，厂商参考设计一律保留。
+  - 厂商设计带 `vendor` 字段（厂商名）。
+  - 设计列表带 `cover_image_url`、`board_preview`；新增签名接口 `GET /api/pub/v1/designs/{id}/board.svg`（PCB 预览图）。
   - 物料列表带上 `footprint`；加 `with_footprint=1` 时只返回有封装的物料。
 - **没部署前页面也能用**：
   - 按模块浏览会退而用该模块最常用的器件族找设计，并标注"近似"。
