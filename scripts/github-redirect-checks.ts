@@ -22,9 +22,18 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     return Response.json({
       truncated: false,
       tree: ["hackrf-one.kicad_pro", "hackrf-one.kicad_sch", "hackrf-one.kicad_pcb"].map((f) => ({
-        path: "hardware/hackrf-one/" + f, type: "blob", mode: "100644", sha: f, size: 100,
+        path: "hardware/hackrf-one/" + f, type: "blob", mode: "100644", sha: f, size: 50_000,
       })),
     });
+  // acme/lfs: Altium files stored with Git LFS (pointer-sized); acme/none: no engineering files; acme/quota: rate limited
+  if (p === "/repos/acme/lfs" || p === "/repos/acme/none") return Response.json({ full_name: p.slice(7), default_branch: "main", private: false });
+  if (p === "/repos/acme/quota") return Response.json({ message: "rate limit" }, { status: 403 });
+  if (/^\/repos\/acme\/(lfs|none)\/commits\//.test(p))
+    return Response.json({ sha: SHA, commit: { tree: { sha: p.includes("lfs") ? "tl" : "tn" }, committer: { date: "2024-01-01T00:00:00Z" } } });
+  if (p === "/repos/acme/lfs/git/trees/tl")
+    return Response.json({ truncated: false, tree: ["board.PrjPcb", "board.SchDoc", "board.PcbDoc"].map((f) => ({ path: "hw/" + f, type: "blob", mode: "100644", sha: f, size: 131 })) });
+  if (p === "/repos/acme/none/git/trees/tn")
+    return Response.json({ truncated: false, tree: [{ path: "README.md", type: "blob", mode: "100644", sha: "r", size: 900 }] });
   return Response.json({ message: "Not Found" }, { status: 404 });
 }) as typeof fetch;
 
@@ -39,6 +48,13 @@ async function main() {
   await assert.rejects(scanGithub(`https://github.com/mossmann/hackrf/tree/${"b".repeat(40)}`), /unexpected address/);
   mode = "slow";
   await assert.rejects(scanGithub(`https://github.com/mossmann/hackrf/tree/${"c".repeat(40)}`), /took too long/);
+  mode = "ok";
+  const { githubUsable } = await import("../src/lib/maker/github-server");
+  assert.equal(await githubUsable(`https://github.com/mossmann/hackrf/tree/${SHA}/hardware/hackrf-one`), true, "real KiCad files");
+  assert.equal(await githubUsable(`https://github.com/acme/lfs/tree/${SHA}`), false, "Git LFS pointers only");
+  assert.equal(await githubUsable(`https://github.com/acme/none/tree/${SHA}`), false, "no engineering project");
+  assert.equal(await githubUsable(`https://github.com/acme/quota/tree/${SHA}`), null, "quota: unknown, never hidden");
+  console.log("PASS: openable-design check (real files / LFS pointers / no project / quota)");
   console.log("PASS: renamed-repository redirects followed within api.github.com only; timeouts reported as such");
 }
 main().catch((e) => {
