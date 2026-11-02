@@ -4,7 +4,7 @@ import PartDetailsModal from "./PartDetailsModal";
 import type { GraphNode } from "@/lib/maker/component-graph";
 import type { Part } from "@/lib/maker/types";
 const cache = new Map<string, { until: number; parts: Part[] }>();
-export default function FamilyVariants({ node }: { node: GraphNode }) {
+export default function FamilyVariants({ node, onCompare }: { node: GraphNode; onCompare?: (mpn: string) => void }) {
   const [lookup, setLookup] = useState<string | null>(null);
   const [parts, setParts] = useState<Part[]>([]),
     [status, setStatus] = useState("Loading catalog variants…");
@@ -122,6 +122,11 @@ export default function FamilyVariants({ node }: { node: GraphNode }) {
                   <small>
                     {p ? "Catalog match · " + p.source : v.identity}
                   </small>
+                  {onCompare && p && v.mpn.toUpperCase() !== node.label.toUpperCase() && (
+                    <button className="text-link compare-link" onClick={() => onCompare(v.mpn)}>
+                      Compare with {node.label}
+                    </button>
+                  )}
                 </td>
                 <td>
                   {p?.package || v.packages.join(", ") || "Not available"}

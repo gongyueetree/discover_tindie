@@ -4,6 +4,7 @@ import Link from "next/link";
 import { partFamily } from "@/lib/maker/part-family";
 import PartDetailsModal from "./PartDetailsModal";
 import FamilyVariants from "./FamilyVariants";
+import PartCompare from "./PartCompare";
 import { ToolHeading } from "./ToolShell";
 
 import type { GraphData } from "@/lib/maker/component-graph";
@@ -38,6 +39,11 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
   );
   if (focusIndex >= 0) initial[focusIndex] = { x: 450, y: 330 };
   const [lookup, setLookup] = useState<string | null>(null);
+  const [compare, setCompare] = useState<{ reference: string; candidates: string[]; family: string } | null>(null);
+  const compareRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (compare) compareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [compare]);
   const [tour, setTour] = useState(false);
   const [selected, setSelected] = useState(Math.max(0, focusIndex));
   const [positions, setPositions] = useState(initial);
@@ -441,9 +447,19 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
           >
             Open designs with this family →
           </Link>
+          <button
+            className="btn"
+            onClick={() => {
+              const swaps = connected.filter((e) => e.type !== REL.co_occurrence).map((e) => data.nodes[e.a === selected ? e.b : e.a].label);
+              setCompare({ reference: data.nodes[selected].label, candidates: swaps.slice(0, 3), family: data.nodes[selected].id });
+            }}
+          >
+            Compare with similar parts →
+          </button>
           <FamilyVariants
             key={data.nodes[selected].id}
             node={data.nodes[selected]}
+            onCompare={(mpn) => setCompare({ reference: data.nodes[selected].label, candidates: [mpn], family: "" })}
           />
           <FamilyInfo key={"info-" + data.nodes[selected].id} family={data.nodes[selected].id} />
           {(() => {
@@ -513,6 +529,11 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
           </p>
         </aside>
       </div>
+      {compare && (
+        <div ref={compareRef}>
+          <PartCompare key={JSON.stringify(compare)} {...compare} onClose={() => setCompare(null)} />
+        </div>
+      )}
       {lookup && (
         <PartDetailsModal
           key={lookup}

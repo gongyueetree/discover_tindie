@@ -17,6 +17,7 @@ import {
   moduleTree,
   plannerParts,
   vendorImage,
+  comparePartsBy,
 } from "@/lib/partdata/maker";
 import type { BomRow } from "@/lib/maker/types";
 
@@ -112,6 +113,14 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
           "Cache-Control": "private, max-age=3600",
         },
       });
+    } else if (req.method === "GET" && head === "compare" && path.length === 1) {
+      /* ------------------------------------------------- alternate comparison (eelib scoring) */
+      const ref = (q.get("ref") || "").trim();
+      const family = (q.get("family") || "").trim().toUpperCase();
+      const given = (q.get("with") || "").split(",").map((x) => x.trim()).filter(Boolean);
+      if (!ref || ref.length > 120 || given.length > 3 || given.some((x) => x.length > 120) || (family && !/^[A-Z0-9]{2,40}$/.test(family)))
+        throw new SourceError("Choose a part and up to three candidates.", 400);
+      result = await comparePartsBy(ref, given, family, visitor);
     } else if (req.method === "GET" && head === "pricing" && path.length === 2) {
       /* ------------------------------------------------- distributor quotes (optional) */
       const mpn = decodeURIComponent(a).slice(0, 120);
