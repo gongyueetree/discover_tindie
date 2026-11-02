@@ -1,5 +1,6 @@
 import "server-only";
 import { pdGet, pdPost, PartdataError, partdataConfigured } from "./client";
+import { compareParts, type ComparePart } from "@/lib/maker/compare";
 import { categoryEn, hasCjk, lifecycleEn, manufacturerCanonical, manufacturerEn } from "./glossary";
 import { terminology } from "@/lib/maker/english";
 import type { Part, ProviderStatus } from "@/lib/maker/types";
@@ -736,4 +737,53 @@ async function addReplacements(
       }
     }
   }
+}
+
+/* ------------------------------------------------------------------ alternate comparison */
+
+/** MPN or public part ID → full part (exact MPN match only; never a guessed neighbour). */
+async function resolvePart(token: string, visitor: string): Promise<Part | null> {
+  if (/^p_[a-z2-7]{8,40}$/.test(token)) return partDetail(token, visitor).catch(() => null);
+  const key = norm(token);
+  if (key.length < 3) return null;
+  const r = await pdGet(`${P}/parts/search`, { q: token, limit: 10 }, visitor).catch(() => null);
+  const hit = (r?.data.items || []).find((x: any) => norm(x.mpn) === key);
+  return hit ? partDetail(String(hit.id), visitor).catch(() => null) : null;
+}
+
+const asCompare = (p: Part): ComparePart => ({
+  id: p.id,
+  mpn: p.mpn,
+  manufacturer: p.manufacturer,
+  package: p.package ?? null,
+  lifecycle: p.lifecycle ?? null,
+  href: "/tools/components?" + new URLSearchParams({ q: p.mpn, partId: p.id, exact: "1" }),
+  parameters: Object.fromEntries(Object.entries(p.parameters || {}).map(([k, v]) => [k, { value: v, source: p.fieldSources?.[k] }])),
+});
+
+/**
+ * The reference part against up to three candidates (eelib's scoring, src/lib/maker/compare.ts).
+ * Candidates the caller did not name are filled from the reference's part family in the catalogue.
+ */
+export async function comparePartsBy(ref: string, given: string[], family: string, visitor: string) {
+  const original = await resolvePart(ref, visitor);
+  if (!original) throw new PartdataError(`${ref} is not in the Tindie parts database.`, 404, "not_found");
+  let tokens = given.filter((t) => norm(t) !== norm(original.mpn) && t !== original.id);
+  if (tokens.length < 3 && family) {
+    const r = await pdGet(`${P}/parts/search`, { q: family, limit: 20 }, visitor).catch(() => null);
+    const seen = new Set([norm(original.mpn), ...tokens.map(norm)]);
+    for (const x of r?.data.items || []) {
+      if (tokens.length >= 3) break;
+      if (!norm(x.mpn).startsWith(family) || seen.has(norm(x.mpn))) continue;
+      seen.add(norm(x.mpn));
+      tokens.push(String(x.id));
+    }
+  }
+  tokens = tokens.slice(0, 3);
+  const found = await Promise.all(tokens.map((t) => resolvePart(t, visitor)));
+  const candidates = found.filter((p): p is Part => !!p);
+  return {
+    ...compareParts(asCompare(original), candidates.map(asCompare)),
+    unresolved: tokens.filter((_, i) => !found[i]).filter((t) => !/^p_/.test(t)),
+  };
 }
