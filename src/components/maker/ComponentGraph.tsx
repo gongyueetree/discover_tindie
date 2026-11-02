@@ -168,6 +168,7 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
                   <span className="name">
                     <b>{it.label}</b>
                     {it.manufacturer && <small>{it.manufacturer}</small>}
+                    {it.description && <small className="desc" title={it.description}>{it.description}</small>}
                   </span>
                   <span className="share" title={`${it.count} of ${mod.designs} designs`}>
                     {mod.designs ? Math.round((100 * it.count) / mod.designs) : 0}%

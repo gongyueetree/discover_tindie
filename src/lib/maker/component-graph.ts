@@ -68,7 +68,7 @@ export interface GraphData {
     module?: {
       id: string;
       designs: number;
-      items: { family: string; label: string; manufacturer: string; count: number }[];
+      items: { family: string; label: string; manufacturer: string; description?: string; count: number }[];
     } | null;
   };
 }
