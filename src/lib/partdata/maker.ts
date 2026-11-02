@@ -98,6 +98,8 @@ export type DesignCard = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  /** Vendor reference designs: the manufacturer that publishes it (from the source link's site). */
+  vendor?: string | null;
   sourceUrl: string;
   license: string | null;
   stars: number | null;
@@ -111,6 +113,7 @@ function toDesign(d: any): DesignCard {
     id: String(d.id),
     name: String(d.name || "Untitled design"),
     kind: d.kind === "vendor" ? "vendor" : "open_source",
+    vendor: d.kind === "vendor" ? vendorName(d.vendor, d.source_url) : null,
     sourceUrl: link(d.source_url) || "",
     license: d.license || null,
     stars: typeof d.stars === "number" ? d.stars : null,
@@ -131,8 +134,34 @@ export const DESIGN_RULES = {
   // Every format the viewer parses: KiCad, Eagle, Altium Designer, EasyEDA / JLCEDA (standard and Pro).
   eda: ["kicad", "eagle", "altium", "easyeda", "jlcpro", "jlc", "jlceda", "lceda"],
 };
+// Vendor reference designs are trusted as published by the manufacturer: always listed, without a star rule.
 const keep = (d: DesignCard) =>
-  d.kind === "open_source" && (d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase());
+  d.kind === "vendor" ||
+  ((d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase()));
+
+/** Manufacturer sites → display names, for vendor reference designs. */
+const VENDOR_SITES: [RegExp, string][] = [
+  [/(^|\.)ti\.com(\.cn)?$/, "Texas Instruments"], [/(^|\.)(analog|maximintegrated|linear)\.com$/, "Analog Devices"],
+  [/(^|\.)st\.com(\.cn)?$/, "STMicroelectronics"], [/(^|\.)nxp\.com(\.cn)?$/, "NXP Semiconductors"],
+  [/(^|\.)microchip\.com$/, "Microchip Technology"], [/(^|\.)(infineon|cypress)\.com$/, "Infineon Technologies"],
+  [/(^|\.)onsemi\.com(\.cn)?$/, "onsemi"], [/(^|\.)renesas\.com$/, "Renesas Electronics"], [/(^|\.)espressif\.com$/, "Espressif Systems"],
+  [/(^|\.)silabs\.com$/, "Silicon Labs"], [/(^|\.)nordicsemi\.com$/, "Nordic Semiconductor"], [/(^|\.)rohm\.com(\.cn)?$/, "ROHM"],
+  [/(^|\.)toshiba[\w-]*\.(com|co\.jp)$/, "Toshiba"], [/(^|\.)(wch|wch-ic)\.(cn|com)$/, "WCH"], [/(^|\.)gigadevice\.com(\.cn)?$/, "GigaDevice"],
+  [/(^|\.)monolithicpower\.com$/, "Monolithic Power Systems"], [/(^|\.)richtek\.com$/, "Richtek"], [/(^|\.)diodes\.com$/, "Diodes Inc"],
+  [/(^|\.)vishay\.com$/, "Vishay"], [/(^|\.)murata\.com$/, "Murata"], [/(^|\.)sg-micro\.com$/, "SG Micro"], [/(^|\.)3peak\.com$/, "3PEAK"],
+  [/(^|\.)raspberrypi\.(com|org)$/, "Raspberry Pi"], [/(^|\.)arduino\.cc$/, "Arduino"], [/(^|\.)xilinx\.com$/, "AMD Xilinx"],
+  [/(^|\.)lattice(semi)?\.com$/, "Lattice Semiconductor"], [/(^|\.)intel\.com$/, "Intel"], [/(^|\.)skyworksinc\.com$/, "Skyworks"],
+  [/(^|\.)qorvo\.com$/, "Qorvo"], [/(^|\.)semtech\.com$/, "Semtech"], [/(^|\.)power\.com$/, "Power Integrations"],
+];
+function vendorName(given: unknown, url: unknown): string | null {
+  if (typeof given === "string" && given.trim()) return manufacturerEn(manufacturerCanonical(given.replace(/参考设计$/, "").trim()));
+  try {
+    const host = new URL(String(url)).hostname.replace(/^www\./, "");
+    return VENDOR_SITES.find(([re]) => re.test(host))?.[1] ?? host;
+  } catch {
+    return null;
+  }
+}
 
 type DesignFilter = { part?: string; mpn?: string; family?: string; function?: string };
 

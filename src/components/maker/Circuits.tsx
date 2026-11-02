@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, Boxes, CircuitBoard, ExternalLink, FileSpreadsheet, Github, ImageOff, Search, Star, Upload } from "lucide-react";
+import { ArrowRight, BadgeCheck, Boxes, CircuitBoard, ExternalLink, FileSpreadsheet, Github, ImageOff, Search, Star, Upload } from "lucide-react";
 import ProjectViewerModal, { type ProjectRequest } from "./ProjectViewerModal";
 import { ToolHeading } from "./ToolShell";
 
@@ -17,6 +17,7 @@ type Design = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  vendor?: string | null;
   sourceUrl: string;
   license: string | null;
   stars: number | null;
@@ -151,7 +152,7 @@ export default function Circuits() {
       <ToolHeading
         eyebrow="Open hardware"
         title="Learn from real designs"
-        description="Open-source boards with full KiCad, EAGLE, Altium or EasyEDA / JLCEDA files, organised by circuit module. Open one to explore its schematic, PCB, 3D view and BOM — or open your own files."
+        description="Manufacturers' reference designs and open-source boards with full KiCad, EAGLE, Altium or EasyEDA / JLCEDA files, organised by circuit module. Open one to explore its schematic, PCB, 3D view and BOM — or open your own files."
         actions={
           <>
             <button className="btn primary" onClick={() => upload.current?.click()}>
@@ -297,8 +298,7 @@ export default function Circuits() {
           <div className="section-top">
             <h2>{heading}</h2>
             <span>
-              {list ? `${list.total.toLocaleString()} ${list.total === 1 ? "design" : "designs"}` : ""} · full CAD files · 1★ or more ·
-              most starred first
+              {list ? `${list.total.toLocaleString()} ${list.total === 1 ? "design" : "designs"}` : ""} · vendor reference designs · open source with full CAD files and 1★ or more
             </span>
           </div>
           <ul className="atlas-grid">
@@ -334,6 +334,11 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
       <button className="atlas-card-pic" onClick={onOpen} tabIndex={-1} aria-hidden>
         {d.coverImageUrl ? (
           <img src={d.coverImageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
+        ) : d.kind === "vendor" ? (
+          <span className="atlas-card-nopic atlas-card-vendorpic">
+            <BadgeCheck size={22} aria-hidden />
+            {d.vendor || "Manufacturer"}
+          </span>
         ) : (
           <span className="atlas-card-nopic">
             <ImageOff size={20} aria-hidden />
@@ -342,6 +347,11 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
         )}
       </button>
       <div className="atlas-card-body">
+        {d.kind === "vendor" && (
+          <span className="vendor-badge" title="Published by the manufacturer">
+            <BadgeCheck size={13} aria-hidden /> Reference design{d.vendor ? ` · ${d.vendor}` : ""}
+          </span>
+        )}
         <div>
           <button className="atlas-card-name" onClick={onOpen}>
             {d.name}
@@ -364,7 +374,7 @@ function DesignCard({ d, onOpen }: { d: Design; onOpen: () => void }) {
           )}
         </div>
         <div className="atlas-card-foot">
-          <span>{d.license ? `Licence: ${d.license}` : "Licence not stated"}</span>
+          <span>{d.kind === "vendor" ? "Manufacturer's terms" : d.license ? `Licence: ${d.license}` : "Licence not stated"}</span>
           <span className="atlas-card-actions">
             {d.sourceUrl && (
               <a href={d.sourceUrl} target="_blank" rel="noreferrer" aria-label={"Source of " + d.name}>

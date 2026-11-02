@@ -1,26 +1,31 @@
-From 8ec717c27d66c8913013756f383d3613a901fb4b Mon Sep 17 00:00:00 2001
+From 380502f3c8f2c851da59400fb01d42d7f6753805 Mon Sep 17 00:00:00 2001
 From: gongyueetree <eelib0418@gmail.com>
 Date: Mon, 2 Nov 2026 05:31:22 +0000
 Subject: [PATCH] feat(pub_api): designs by circuit module, min_stars / eda
- filters, footprint in part lists
+ filters, vendor name, footprint in part lists
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-For Tindie Discover (Open hardware by module; only openable KiCad/Eagle designs with >=1 star;
-PCB planner lists only parts that have a footprint).
+For Tindie Discover (Open hardware by module; openable open-source designs with >=1 star plus all
+vendor reference designs; PCB planner lists only parts that have a footprint).
 
 - GET /api/pub/v1/designs?function=<module id> (includes sub-modules, via oshw_bom_modules)
-- min_stars, eda (comma separated) filters applied before paging, so totals stay correct
+- min_stars, eda (comma separated) filters applied before paging, so totals stay correct; they
+  constrain open-source designs only — vendor reference designs are always kept
+- vendor designs carry vendor (from project_category, e.g. "TI 参考设计" -> "TI")
 - parts/search and parts/lookup items carry footprint (withheld when it has a pending conflict);
   with_footprint=1 returns only parts with a footprint
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018MWFKK7DmS3uJmhqWTQfJ4
 ---
- ezplm_pilot/pub_api.py | 69 ++++++++++++++++++++++++++++++++++++------
- tests/test_pub_api.py  | 39 ++++++++++++++++++++++++
- 2 files changed, 98 insertions(+), 10 deletions(-)
+ ezplm_pilot/pub_api.py | 73 +++++++++++++++++++++++++++++++++++-------
+ tests/test_pub_api.py  | 41 ++++++++++++++++++++++++
+ 2 files changed, 103 insertions(+), 11 deletions(-)
 
 diff --git a/ezplm_pilot/pub_api.py b/ezplm_pilot/pub_api.py
-index 462918e..affe96f 100644
+index 462918e..d7a4674 100644
 --- a/ezplm_pilot/pub_api.py
 +++ b/ezplm_pilot/pub_api.py
 @@ -25,7 +25,7 @@ from urllib.parse import quote
@@ -110,7 +115,17 @@ index 462918e..affe96f 100644
      db.commit()
      return reply({"items": items}, hdr, pagination={"limit": limit, "offset": offset, "has_more": len(rows) > limit and offset + limit < SEARCH["max_offset"] + SEARCH["max_limit"]})
  
-@@ -435,8 +468,10 @@ def _design_rows(db, bids: list[str]) -> list[dict]:
+@@ -404,7 +437,8 @@ def public_design(db, b: OshwBom, rs: RepoStat | None, n_items: int, full: bool
+         src = b.repo
+     out = {"id": oid(db, "design", b.bom_id), "name": b.project_name, "kind": kind, "source_url": src, "license": lic or None,
+            "stars": b.stars if kind == "open_source" else None, "eda_tool": b.eda_tool or None, "part_count": n_items,
+-           "summary": (rs.description if rs else None) if kind == "open_source" else None}
++           "summary": (rs.description if rs else None) if kind == "open_source" else None,
++           "vendor": ((b.project_category or "").removesuffix("参考设计").strip() or None) if kind == "vendor" else None}
+     if not full:
+         return out
+     if kind == "vendor":                                  # 厂商设计资料条款没审过：只给来源链接，不转发 BOM
+@@ -435,8 +469,10 @@ def _design_rows(db, bids: list[str]) -> list[dict]:
  
  
  @router.get("/designs")
@@ -119,11 +134,11 @@ index 462918e..affe96f 100644
 +async def designs(part: str = "", mpn: str = "", family: str = "", function: str = "", min_stars: int = 0, eda: str = "",
 +                  limit: int = 10, offset: int = 0, ctx: dict = Depends(partner)):
 +    """用到某个物料（part=对外 ID）/ 型号（mpn）/ 器件族（family）/ 含某电路模块（function=模块 id，含子类）的参考设计。必须给其中一个。
-+    可选过滤（在分页之前做）：min_stars 最少 GitHub 星数（厂商设计没有星数，min_stars≥1 时不出）；eda 工具，逗号分隔（如 kicad,eagle）。"""
++    可选过滤（在分页之前做，只约束开源工程，厂商参考设计一律保留）：min_stars 最少 GitHub 星数；eda 工具，逗号分隔（如 kicad,eagle）。"""
      hdr = need(ctx, "designs:read")
      db = ctx["db"]
      limit, offset = max(1, min(limit, SEARCH["max_limit"])), max(0, min(offset, SEARCH["max_offset"]))
-@@ -450,9 +485,23 @@ async def designs(part: str = "", mpn: str = "", family: str = "", limit: int =
+@@ -450,9 +486,24 @@ async def designs(part: str = "", mpn: str = "", family: str = "", limit: int =
          snap = kg.current(db)
          f = family.removeprefix("fam:")
          bids = [d["design_id"] for d in kg.designs_of(db, snap, f, limit=500)[0]] if snap else []
@@ -133,26 +148,27 @@ index 462918e..affe96f 100644
 +        ids = {f} | {m for (m,) in db.execute(select(ModuleCategory.id).where(ModuleCategory.id.like(f + ".%")))}
 +        q = (select(OshwBom.bom_id).join(OshwBomModule, OshwBomModule.bom_id == OshwBom.bom_id)
 +             .where(OshwBomModule.module_id.in_(ids), *design_where()))
-+        if min_stars > 0:
-+            q = q.where(OshwBom.stars >= min_stars)
++        if min_stars > 0:                                   # 厂商参考设计没有星数，不受星数限制
++            q = q.where(or_(OshwBom.stars >= min_stars, OshwBom.gh_repo.is_(None)))
 +        bids = list(dict.fromkeys(b for (b,) in db.execute(q.order_by(OshwBom.stars.desc().nullslast()).limit(4000))))
      else:
 -        _err("bad_request", "要给 part、mpn 或 family 其中一个（型号至少 3 个字符）", 400)
 +        _err("bad_request", "要给 part、mpn、family 或 function 其中一个（型号至少 3 个字符）", 400)
      rows = _design_rows(db, bids[:2000])
++    # min_stars / eda 只约束开源工程：厂商参考设计（只给来源链接）一律保留
 +    if min_stars > 0:
-+        rows = [r for r in rows if (r["stars"] or 0) >= min_stars]
++        rows = [r for r in rows if r["kind"] == "vendor" or (r["stars"] or 0) >= min_stars]
 +    tools = {t.strip().lower() for t in eda.split(",") if t.strip()}
 +    if tools:
-+        rows = [r for r in rows if (r["eda_tool"] or "").lower() in tools]
++        rows = [r for r in rows if r["kind"] == "vendor" or (r["eda_tool"] or "").lower() in tools]
      db.commit()
      return reply({"items": rows[offset:offset + limit]}, hdr, pagination={"limit": limit, "offset": offset, "total": min(len(rows), SEARCH["max_offset"] + SEARCH["max_limit"])})
  
 diff --git a/tests/test_pub_api.py b/tests/test_pub_api.py
-index 74a32f2..a99638c 100644
+index 74a32f2..03bfbc4 100644
 --- a/tests/test_pub_api.py
 +++ b/tests/test_pub_api.py
-@@ -131,3 +131,42 @@ def test_settings_test_output_survives_ampersand(client, monkeypatch):
+@@ -131,3 +131,44 @@ def test_settings_test_output_survives_ampersand(client, monkeypatch):
      monkeypatch.setattr(settings, "key_source", lambda: Key())
      page = client.post("/settings/test").text
      assert "pageSize=1" in page and "API Key 接口" in page and "hits" in page
@@ -181,9 +197,11 @@ index 74a32f2..a99638c 100644
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx"})
 +    assert set(names(r)) == {"RS485 board", "Zero-star board", "TI design"}            # 子类 pfx.ldo 的设计也算
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "min_stars": "1"})
-+    assert names(r) == ["RS485 board"] and r.json()["meta"]["pagination"]["total"] == 1   # 0 星、厂商设计（无星数）不出
++    assert names(r) == ["RS485 board", "TI design"] and r.json()["meta"]["pagination"]["total"] == 2   # 0 星的不出；厂商设计不受星数限制
++    vend = next(x for x in r.json()["data"]["items"] if x["kind"] == "vendor")
++    assert vend["vendor"] == "TI" and vend["stars"] is None
 +    r = call(client, kid, sec, "GET", "/api/pub/v1/designs", {"function": "pfx", "eda": "kicad,eagle"})
-+    assert set(names(r)) == {"RS485 board", "Zero-star board"}
++    assert set(names(r)) == {"RS485 board", "Zero-star board", "TI design"}
 +    assert call(client, kid, sec, "GET", "/api/pub/v1/designs", {}).status_code == 400
 +    s = call(client, kid, sec, "GET", "/api/pub/v1/parts/search", {"q": "PUBX485"}).json()["data"]["items"]
 +    by = {x["mpn"]: x for x in s}

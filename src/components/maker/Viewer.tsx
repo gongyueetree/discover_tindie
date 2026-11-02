@@ -39,6 +39,7 @@ type DesignInfo = {
   id: string;
   name: string;
   kind: "open_source" | "vendor";
+  vendor?: string | null;
   sourceUrl: string;
   license: string | null;
   stars: number | null;
@@ -201,7 +202,13 @@ export default function Viewer({
   return (
     <>
       <ToolHeading
-        eyebrow={design ? (design.kind === "vendor" ? "Vendor reference design" : "Open-source design") : "Project viewer"}
+        eyebrow={
+          design
+            ? design.kind === "vendor"
+              ? `Reference design${design.vendor ? " · " + design.vendor : ""}`
+              : "Open-source design"
+            : "Project viewer"
+        }
         title={design?.name || bundle?.project.name || "Look inside a project"}
         description={
           design
@@ -446,7 +453,11 @@ export default function Viewer({
 function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef }) {
   return (
     <div className="design-meta">
-      <span className="pill">{design.kind === "vendor" ? "Vendor reference" : "Open source"}</span>
+      {design.kind === "vendor" ? (
+        <span className="vendor-badge">Reference design{design.vendor ? ` · ${design.vendor}` : ""}</span>
+      ) : (
+        <span className="pill">Open source</span>
+      )}
       {design.license && (
         <span className="pill muted">{design.kind === "vendor" ? "Vendor terms apply" : `Licence: ${design.license}`}</span>
       )}
@@ -460,7 +471,7 @@ function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef
       {github?.commit && <span className="pill muted">commit {github.commit.slice(0, 10)}</span>}
       {design.sourceUrl && (
         <a className="btn small outline" href={design.sourceUrl} target="_blank" rel="noreferrer">
-          {design.kind === "vendor" ? "Vendor page" : "Source on GitHub"} <ExternalLink size={12} />
+          {design.kind === "vendor" ? `${design.vendor || "Vendor"} page` : "Source on GitHub"} <ExternalLink size={12} />
         </a>
       )}
       {design.bomWithheldReason && <p className="notice" style={{ width: "100%" }}>{design.bomWithheldReason}</p>}

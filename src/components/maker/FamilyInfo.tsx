@@ -4,7 +4,7 @@ import { Star } from "lucide-react";
 
 type Info = {
   family: string;
-  designs: { items: { id: string; name: string; kind: string; stars: number | null; partCount: number }[]; total: number };
+  designs: { items: { id: string; name: string; kind: string; vendor?: string | null; stars: number | null; partCount: number }[]; total: number };
   alternatives: {
     family: string;
     label: string;
@@ -51,6 +51,7 @@ export default function FamilyInfo({ family }: { family: string }) {
         info.designs.items.map((d) => (
           <a className="graph-project" key={d.id} href={"/tools/circuits?design=" + encodeURIComponent(d.id)}>
             {d.name}
+            {d.kind === "vendor" && <small> · Reference design{d.vendor ? ` · ${d.vendor}` : ""}</small>}
             {d.stars !== null && (
               <small>
                 {" "}
