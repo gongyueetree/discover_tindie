@@ -42,11 +42,14 @@ export default function ServiceWorkerRegister() {
       window.addEventListener('load', register, { once: true });
     }
 
-    // Reload once when the controlling SW changes, so the user gets
-    // the fresh version without a manual refresh.
+    // Reload once when an UPDATED service worker takes over, so returning visitors get the
+    // fresh version. On a first visit there is no previous controller: the new worker's
+    // clients.claim() also fires controllerchange, and reloading then would throw away
+    // whatever the visitor had just started (a click, a typed search).
+    const hadController = !!navigator.serviceWorker.controller;
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return;
+      if (refreshing || !hadController) return;
       refreshing = true;
       window.location.reload();
     });

@@ -15,7 +15,6 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
-  distDir: process.env.NODE_ENV === 'production' ? '.next-build' : '.next',
   experimental: {
     // Keep the Node 'postgres' driver out of the webpack bundle so it doesn't
     // try to resolve its cloudflare:/node: variants. Loaded at runtime instead.
