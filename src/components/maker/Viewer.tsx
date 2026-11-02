@@ -8,6 +8,8 @@ import {
   ShieldCheck,
   ArrowRight,
   FolderOpen,
+  ExternalLink,
+  Star,
 } from "lucide-react";
 import {
   canDownloadProject,
@@ -22,18 +24,33 @@ import type {
   InputAsset,
 } from "@/vendor/canon/lib/eda/types";
 import {
-  SchematicViewer,
   PcbViewer,
   Board3DViewer,
-  BomViewer,
 } from "@/vendor/canon/components/EdaViewers";
 import ProjectBom from "./ProjectBom";
 import NativeSchematic from "./NativeSchematic";
 import FullscreenViewer from "./FullscreenViewer";
 import InteractiveBom from "./InteractiveBom";
 import GithubImport from "./GithubImport";
+import type { GithubProject } from "@/lib/maker/github-projects";
 import { download } from "@/lib/maker/download";
-import { boundedBody } from "@/vendor/canon/lib/allegro-http";
+type DesignInfo = {
+  id: string;
+  name: string;
+  kind: "open_source" | "vendor";
+  sourceUrl: string;
+  license: string | null;
+  stars: number | null;
+  edaTool: string | null;
+  partCount: number;
+  summary: string | null;
+  bom:
+    | { designators: string; quantity: number; value: string; mpn: string; manufacturer: string; footprint: string; partId: string | null }[]
+    | null;
+  bomWithheldReason: string | null;
+};
+type GithubRef = { repo: string; commit: string | null; subdir: string } | null;
+
 export default function Viewer({
   initialSearch,
   initialFiles,
@@ -50,13 +67,12 @@ export default function Viewer({
     [tab, setTab] = useState("Schematic"),
     [visited, setVisited] = useState<string[]>([]),
     [busy, setBusy] = useState(false),
+    [status, setStatus] = useState(""),
     [error, setError] = useState(""),
-    [remote, setRemote] = useState(""),
-    [viewId, setViewId] = useState(""),
-    [modelNote, setModelNote] = useState(""),
-    [pending, setPending] = useState("");
+    [design, setDesign] = useState<DesignInfo | null>(null),
+    [github, setGithub] = useState<GithubRef>(null);
   const input = useRef<HTMLInputElement>(null);
-  async function open(files: File[], source: ProjectOrigin = "local") {
+  async function open(files: File[], source: ProjectOrigin = "local"): Promise<boolean> {
     setBusy(true);
     setError("");
     try {
@@ -68,29 +84,79 @@ export default function Viewer({
         );
       setBundle(b);
       setVisited([]);
-      setRemote("");
-      setPending("");
-      setViewId("");
-      setModelNote("");
       setAssets(r.assets);
       setOriginals(r.assets);
       setOrigin(source);
       setTab(b.schematics.length ? "Schematic" : "PCB");
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
   }
   async function example(kind: string) {
     try {
-      const r = await fetch(
-        `/examples/${kind === "eagle" ? "eagle-led.zip" : "kicad-demo.zip"}`,
-      );
+      const r = await fetch(`/examples/${kind === "eagle" ? "eagle-led.zip" : "kicad-demo.zip"}`);
       if (!r.ok) throw Error("Example file unavailable");
       await open([new File([await r.blob()], `${kind}.zip`)], "example");
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+  /**
+   * A design from the Tindie parts database: metadata + BOM from partdata, engineering
+   * files from GitHub at the pinned commit, parsed here with the eelib / canon engines.
+   */
+  async function loadDesign(id: string) {
+    setBusy(true);
+    setError("");
+    setStatus("Reading the design record…");
+    try {
+      const r = await fetch(`/api/maker/circuits/${encodeURIComponent(id)}`);
+      const d = await r.json();
+      if (!r.ok) throw Error(d.error || "Design unavailable");
+      setDesign(d.design);
+      setGithub(d.github);
+      if (!d.github) {
+        setStatus("");
+        return;
+      }
+      setStatus(`Fetching ${d.github.repo} at ${String(d.github.commit || "default branch").slice(0, 10)} from GitHub…`);
+      const scanRes = await fetch("/api/maker/github/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: d.design.sourceUrl }),
+      });
+      const scan = await scanRes.json();
+      if (!scanRes.ok) throw Error(scan.error || "GitHub scan failed");
+      const sub = String(d.github.subdir || "").replace(/\/$/, "");
+      const projects: GithubProject[] = scan.projects || [];
+      const choice =
+        projects.find((p) => p.directory === sub) ||
+        projects.find((p) => sub && p.directory.startsWith(sub + "/")) ||
+        projects.find((p) => p.recommended) ||
+        projects[0];
+      if (!choice) throw Error("No KiCad or Eagle project found at the pinned source.");
+      setStatus(`Importing ${choice.name} (${choice.fileCount} files)…`);
+      const imp = await fetch("/api/maker/github/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: scan.token, project: choice.id }),
+      });
+      if (!imp.ok) throw Error((await imp.json().catch(() => ({}))).error || "GitHub import failed");
+      setStatus("Parsing schematic and PCB…");
+      const ok = await open([new File([await imp.blob()], choice.name + ".zip")], "catalogue");
+      setStatus("");
+      if (!ok) setError((old) => old + " The design's BOM from the parts database is shown below.");
+    } catch (e) {
+      setStatus("");
+      setError(
+        `${e instanceof Error ? e.message : String(e)} The design's BOM from the parts database is shown below; the files remain available at the source link.`,
+      );
+    } finally {
+      setBusy(false);
     }
   }
   useEffect(() => {
@@ -100,199 +166,22 @@ export default function Viewer({
     }
     const p = new URLSearchParams(initialSearch ?? location.search);
     if (p.get("example")) void example(p.get("example")!);
-    else if (p.get("project")) {
-      setBusy(true);
-      const id = p.get("project")!;
-      fetch(`/api/maker/circuits/${encodeURIComponent(id)}/view`)
-        .then(async (r) => {
-          const d = await r.json();
-          if (!r.ok) {
-            if (r.status === 409) setPending(id);
-            throw Error(d.error || "Preview unavailable");
-          }
-          return d;
-        })
-        .then((d) => {
-          setBundle(d.bundle);
-          setVisited([]);
-          setAssets([]);
-          setOriginals([]);
-          setOrigin("catalogue");
-          setRemote(id);
-          setViewId(d.view.id);
-          setTab(d.bundle.schematics.length ? "Schematic" : "PCB");
-        })
-        .catch((e) => setError(e.message))
-        .finally(() => setBusy(false));
-    }
+    else if (p.get("design")) void loadDesign(p.get("design")!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const boardAssets = useMemo(() => {
     const merged = new Map([...originals, ...assets].map((a) => [a.path, a]));
     return [...merged.values()];
   }, [originals, assets]);
-  const requestedModels = visited.includes("3D");
-  useEffect(() => {
-    if (!requestedModels || !remote || originals.length) return;
-    const ac = new AbortController();
-    fetch(`/api/maker/circuits/${encodeURIComponent(remote)}/download`, {
-      signal: ac.signal,
-    })
-      .then(async (r) => {
-        if (!r.ok) throw Error("Source silkscreen unavailable");
-        return filesToInputAssets([new File([await r.blob()], "project.zip")]);
-      })
-      .then((parsed) => {
-        if (!ac.signal.aborted) setOriginals(parsed.assets);
-      })
-      .catch(() => {
-        /* Existing board geometry remains usable if source files are unavailable. */
-      });
-    return () => ac.abort();
-  }, [requestedModels, remote]);
-  useEffect(() => {
-    if (!requestedModels || !viewId) return;
-    const abort = new AbortController();
-    setModelNote("Loading project model manifest…");
-    (async () => {
-      try {
-        const r = await fetch(`/api/maker/models/${viewId}`, {
-          signal: abort.signal,
-        });
-        if (!r.ok) throw Error("Project models are unavailable.");
-        const d = await r.json();
-        const entries = Object.entries(d.models || {}) as [
-          string,
-          { sha256: string; name: string; bytes: number },
-        ][];
-        let total = 0;
-        const accepted = entries.filter(([, m]) => {
-          if (
-            !Number.isFinite(m.bytes) ||
-            m.bytes < 0 ||
-            m.bytes > 25 * 1024 * 1024 ||
-            total + m.bytes > 100 * 1024 * 1024
-          )
-            return false;
-          total += m.bytes;
-          return true;
-        });
-        const loaded: InputAsset[] = [];
-        let cursor = 0;
-        await Promise.all(
-          Array.from({ length: Math.min(4, accepted.length) }, async () => {
-            while (cursor < accepted.length && !abort.signal.aborted) {
-              const [path, m] = accepted[cursor++];
-              try {
-                const resp = await fetch(
-                  `/api/maker/models/${viewId}/${m.sha256}`,
-                  {
-                    signal: AbortSignal.any([
-                      abort.signal,
-                      AbortSignal.timeout(25000),
-                    ]),
-                  },
-                );
-                if (resp.ok)
-                  loaded.push({
-                    path,
-                    bytes: await boundedBody(
-                      resp.body,
-                      Math.min(m.bytes, 25 * 1024 * 1024),
-                    ),
-                  });
-              } catch {
-                /* One missing or timed-out model must not discard the others. */
-              }
-            }
-          }),
-        );
-        if (!abort.signal.aborted) {
-          if (loaded.length) setAssets(loaded);
-          setModelNote(
-            entries.length
-              ? `${loaded.length} of ${entries.length} project model files downloaded. Geometry rendering is checked separately.`
-              : "No project-specific models are available; official library references are tried where present.",
-          );
-        }
-      } catch (e) {
-        if (!abort.signal.aborted) setModelNote(String(e));
-      }
-    })();
-    return () => abort.abort();
-  }, [requestedModels, viewId]);
-
-  async function prepareRemote() {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await fetch(`/api/maker/circuits/${pending}/view`, {
-        method: "POST",
-      });
-      const d = await r.json();
-      if (!r.ok) throw Error(d.error);
-      if (d.view?.state === "ready") {
-        const ready = await fetch(`/api/maker/circuits/${pending}/view`);
-        const data = await ready.json();
-        if (!ready.ok) throw Error(data.error);
-        setBundle(data.bundle);
-        setVisited([]);
-        setAssets([]);
-        setOriginals([]);
-        setOrigin("catalogue");
-        setRemote(pending);
-        setViewId(d.view.id);
-        setPending("");
-        setTab(data.bundle.schematics.length ? "Schematic" : "PCB");
-      } else
-        setError(
-          `Preview status: ${d.view?.state || "queued"}. The catalogue is preparing this project. Click again to refresh.`,
-        );
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function getOriginals() {
-    if (originals.length) return originals;
-    if (!remote) throw Error("Original project files are unavailable.");
-    const r = await fetch(
-      `/api/maker/circuits/${encodeURIComponent(remote)}/download`,
-    );
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      throw Error(d.error || "Project download unavailable.");
-    }
-    const parsed = await filesToInputAssets([
-      new File([await r.blob()], "project.zip"),
-    ]);
-    if (!parsed.assets.length)
-      throw Error("The source archive contains no project files.");
-    setOriginals(parsed.assets);
-    return parsed.assets;
-  }
-
-  async function loadOriginals() {
-    setBusy(true);
-    setError("");
-    try {
-      await getOriginals();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function downloadProject() {
     if (!bundle || !canDownloadProject(origin)) return;
     setBusy(true);
     setError("");
     try {
-      const source = await getOriginals();
+      if (!originals.length) throw Error("Original project files are unavailable.");
       download(
-        projectPackage(bundle, source, origin),
+        projectPackage(bundle, originals, origin),
         `${bundle.project.name.replace(/[\\/:*?"<>|]/g, "_")}-with-bom.zip`,
         "application/zip",
       );
@@ -311,19 +200,24 @@ export default function Viewer({
   return (
     <>
       <ToolHeading
-        eyebrow="PROJECT VIEWER"
-        title={bundle?.project.name || "Look inside your next project."}
-        description="Schematics, PCB layers and 3D. Local uploads stay in this browser. Catalogue previews load from eelib."
+        eyebrow={design ? (design.kind === "vendor" ? "Vendor reference design" : "Open-source design") : "Project viewer"}
+        title={design?.name || bundle?.project.name || "Look inside a project"}
+        description={
+          design
+            ? design.summary ||
+              (design.kind === "vendor"
+                ? "Published by the manufacturer. Open the vendor page for its files and terms."
+                : "Schematic, PCB, 3D and BOM, opened from the design's source files.")
+            : "Schematics, PCB layers, 3D and BOM. Uploaded files are parsed in your browser and never leave it."
+        }
         actions={
           <>
-            <button
-              className="btn primary"
-              onClick={() => input.current?.click()}
-              disabled={busy}
-            >
-              <FolderOpen size={17} />
-              Open files
-            </button>
+            {!design && (
+              <button className="btn primary" onClick={() => input.current?.click()} disabled={busy}>
+                <FolderOpen size={17} />
+                Open files
+              </button>
+            )}
             {bundle && canDownloadProject(origin) && (
               <button
                 className="btn"
@@ -348,27 +242,19 @@ export default function Viewer({
           e.target.value = "";
         }}
       />
-      <GithubImport
-        autoFocus={focusGithub}
-        onImport={(files) => open(files, "github")}
-        disabled={busy}
-      />
+      {design && <DesignPanel design={design} github={github} />}
+      {!bundle && !design && (
+        <GithubImport autoFocus={focusGithub} onImport={async (files) => void (await open(files, "github"))} disabled={busy} />
+      )}
       {error && (
         <div role="alert" className="notice error">
           {error}
         </div>
       )}
-      {pending && (
-        <button
-          className="btn primary"
-          disabled={busy}
-          onClick={() => void prepareRemote()}
-        >
-          Prepare / refresh project preview
-        </button>
-      )}
-      {busy && <div className="notice">Loading engineering files…</div>}
-      {!bundle ? (
+      {busy && <div className="notice info" role="status">{status || "Loading engineering files…"}</div>}
+      {design && !bundle && !busy ? (
+        design.bom ? <DesignBom design={design} /> : null
+      ) : !bundle ? (
         <>
           <div
             className="dropzone"
@@ -420,10 +306,12 @@ export default function Viewer({
             <span className="right">
               <ShieldCheck size={14} />
               {origin === "local"
-                ? "Local session"
+                ? "Parsed in your browser"
                 : origin === "github"
                   ? "GitHub project"
-                  : "Public project"}
+                  : origin === "example"
+                    ? "Example project"
+                    : "Open-source design"}
             </span>
           </div>
           <FullscreenViewer label={tab}>
@@ -451,7 +339,6 @@ export default function Viewer({
                 Match this BOM <ArrowRight size={15} />
               </button>
             </div>
-            {tab === "3D" && modelNote && <p className="notice">{modelNote}</p>}
             <div className="viewer-workspace">
               {visited.includes("3D") && (
                 <div hidden={tab !== "3D"} key={`3d-${bundle.bundleId}`}>
@@ -476,7 +363,7 @@ export default function Viewer({
                   key={bundle.bundleId}
                   bundle={bundle}
                   assets={assets}
-                  viewId={viewId}
+                  viewId=""
                 />
               </div>
               {visited.includes("iBOM") && (
@@ -499,28 +386,6 @@ export default function Viewer({
                         ? "Preparing download…"
                         : "Download project ZIP + BOM"}
                     </button>
-                  )}
-                  {remote && !originals.length && (
-                    <>
-                      <p className="notice">
-                        Load original files to download them individually, or
-                        download the complete ZIP with the current BOM.
-                      </p>
-                      <button
-                        className="btn"
-                        disabled={busy}
-                        onClick={() => void loadOriginals()}
-                      >
-                        Load original files
-                      </button>
-                      {bundle.inventory.map((f) => (
-                        <div key={f.id}>
-                          <FileText size={18} />
-                          <span>{f.relativePath}</span>
-                          <small>{f.entryRole}</small>
-                        </div>
-                      ))}
-                    </>
                   )}
                   <p className="notice">
                     {canDownloadProject(origin)
@@ -573,5 +438,74 @@ export default function Viewer({
         </>
       )}
     </>
+  );
+}
+
+function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef }) {
+  return (
+    <div className="design-meta">
+      <span className="pill">{design.kind === "vendor" ? "Vendor reference" : "Open source"}</span>
+      {design.license && (
+        <span className="pill muted">{design.kind === "vendor" ? "Vendor terms apply" : `Licence: ${design.license}`}</span>
+      )}
+      {design.stars !== null && (
+        <span className="pill muted">
+          <Star size={11} /> {design.stars.toLocaleString()}
+        </span>
+      )}
+      {design.edaTool && <span className="pill muted">{design.edaTool}</span>}
+      <span className="pill muted">{design.partCount} identified parts</span>
+      {github?.commit && <span className="pill muted">commit {github.commit.slice(0, 10)}</span>}
+      {design.sourceUrl && (
+        <a className="btn small outline" href={design.sourceUrl} target="_blank" rel="noreferrer">
+          {design.kind === "vendor" ? "Vendor page" : "Source on GitHub"} <ExternalLink size={12} />
+        </a>
+      )}
+      {design.bomWithheldReason && <p className="notice" style={{ width: "100%" }}>{design.bomWithheldReason}</p>}
+    </div>
+  );
+}
+
+function DesignBom({ design }: { design: DesignInfo }) {
+  if (!design.bom?.length) return null;
+  return (
+    <section className="design-bom">
+      <div className="section-top">
+        <h2>Bill of materials</h2>
+        <span>From the Tindie parts database · {design.bom.length} lines</span>
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>References</th>
+              <th>Qty</th>
+              <th>Part number</th>
+              <th>Manufacturer</th>
+              <th>Value / footprint</th>
+            </tr>
+          </thead>
+          <tbody>
+            {design.bom.map((b, i) => (
+              <tr key={i}>
+                <td>{b.designators}</td>
+                <td>{b.quantity || ""}</td>
+                <td>
+                  {b.partId ? (
+                    <a className="text-link" href={"/tools/components?" + new URLSearchParams({ q: b.mpn, partId: b.partId, exact: "1" })}>
+                      {b.mpn}
+                    </a>
+                  ) : (
+                    b.mpn || "—"
+                  )}
+                </td>
+                <td>{b.manufacturer || "—"}</td>
+                <td>{[b.value, b.footprint].filter(Boolean).join(" · ") || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

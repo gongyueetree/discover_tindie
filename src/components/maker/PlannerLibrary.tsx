@@ -93,7 +93,7 @@ export default function PlannerLibrary({
         "/api/maker/library?" +
           new URLSearchParams(
             part
-              ? { kind: "ezplm", mpn: part.mpn }
+              ? { kind: "ezplm", mpn: part.mpn, ...(part.id.startsWith("p_") ? { partId: part.id } : {}) }
               : { kind: "file", library: lib, name },
           ),
       );
@@ -116,7 +116,7 @@ export default function PlannerLibrary({
           setError("");
         }}
       >
-        <option value="ezplm">ezPLM catalogue</option>
+        <option value="ezplm">Parts database</option>
         <option value="kicad">KiCad official · GitLab</option>
       </select>
       {source === "kicad" && (

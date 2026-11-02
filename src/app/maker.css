@@ -464,15 +464,7 @@
   max-width: 1200px;
   border-radius: 5px;
 }
-.discover-preserved {
-  border-top: 1px solid var(--line);
-}
-.discover-preserved .wrap {
-  max-width: 1320px;
-}
-.maker-embedded .maker-header {
-  display: none;
-}
+/* The Resources tab is the live Discover page unchanged (1200px .wrap from globals.css). */
 .tool-content {
   padding: 32px 4% 50px;
   max-width: 1800px;

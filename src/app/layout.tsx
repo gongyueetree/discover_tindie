@@ -1,13 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./maker.css";
+import "./tindie-theme.css";
 import { Providers } from "@/components/Providers";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import BottomTabBar from "@/components/BottomTabBar";
 
 const SITE_URL = "https://resource.tindie.com";
-const TITLE = "Tindie Maker Tools — Discover, Explore & Build";
-const DESC = "Free hardware tools, open-source designs, component search and hardware discoveries for makers.";
+const TITLE = "Tindie Resources — Hardware Discoveries, Components & Open Hardware";
+const DESC = "Daily hardware discoveries, a trusted maker directory, component search with CAD previews, open-source hardware designs and a PCB planner.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

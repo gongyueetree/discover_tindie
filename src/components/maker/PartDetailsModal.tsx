@@ -24,6 +24,19 @@ export default function PartDetailsModal({
   const dialog = useRef<HTMLDialogElement>(null);
   const [part, setPart] = useState<Part | null>(null),
     [error, setError] = useState("");
+  const partId = part?.id || "";
+  useEffect(() => {
+    if (!part || part.detailed || !partId.startsWith("p_")) return;
+    const ac = new AbortController();
+    fetch("/api/maker/parts/" + partId, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.part) setPart((cur) => (cur?.id === partId ? d.part : cur));
+      })
+      .catch(() => {});
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partId]);
   useEffect(() => {
     const prior = document.activeElement as HTMLElement | null;
     const modal = dialog.current;
@@ -133,7 +146,7 @@ export default function PartDetailsModal({
         <>
           <p>{part.manufacturer}</p>
           <p>{part.description}</p>
-          <CadPreview mpn={part.mpn} />
+          {part.id.startsWith("p_") && <CadPreview partId={part.id} mpn={part.mpn} />}
           <div className="part-modal-downloads">
             {part.datasheet && <DatasheetReader url={part.datasheet} />}
             {part.cad.map((c) => (

@@ -99,7 +99,7 @@ export default function ProjectBom({
   return (
     <>
       <p className="notice">
-        Query ezPLM first, then configured distributor APIs. Only exact or
+        Checks the Tindie parts database first, then configured distributor APIs. Only exact or
         manually confirmed matches are automatically synchronized to this
         project and its iBOM. Applied identities are included in the project ZIP
         as BOM CSV/JSON. Original source files remain unchanged.

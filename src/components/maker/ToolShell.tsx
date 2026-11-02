@@ -1,58 +1,50 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Cpu,
-  CircuitBoard,
-  BookOpen,
-  LayoutGrid,
-  ArrowUpRight,
-} from "lucide-react";
+import { BookOpen, Cpu, CircuitBoard, LayoutGrid } from "lucide-react";
+
+/**
+ * The four tabs of the Discover page. This app is embedded in tindie.com (iframe), which
+ * already provides the site header and footer, so the shell renders only the tab bar —
+ * same 1200px column, Poppins and turquoise as the live Discover page.
+ */
 export const TOOL_LINKS = [
-  { slug: "components", label: "Components", icon: Cpu },
-  { slug: "circuits", label: "Explore circuits", icon: CircuitBoard },
-  { slug: "planner", label: "PCB planner", icon: LayoutGrid },
-  { slug: "resources", label: "Resources", icon: BookOpen },
+  { href: "/", label: "Resources", icon: BookOpen, match: ["/", "/embed", "/tools/resources", "/discover"] },
+  { href: "/tools/components", label: "Components", icon: Cpu, match: ["/tools/components"] },
+  { href: "/tools/circuits", label: "Open hardware", icon: CircuitBoard, match: ["/tools/circuits", "/tools/viewer"] },
+  { href: "/tools/planner", label: "PCB planner", icon: LayoutGrid, match: ["/tools/planner", "/tools/bom"] },
 ];
+
 export function ToolShell({ children }: { children: React.ReactNode }) {
-  const path = usePathname();
+  const path = usePathname() || "/";
   return (
     <div className="maker">
-      <header className="maker-header">
-        <Link href="/" className="maker-wordmark">
-          tindie<span> / maker tools</span>
-        </Link>
-        <nav>
-          <a href="https://www.tindie.com" target="_blank" rel="noreferrer">
-            Marketplace <ArrowUpRight size={14} />
-          </a>
-        </nav>
-        <span className="public-label">
-          <i /> Free to explore. No account.
-        </span>
-      </header>
-      <div className="maker-toolnav">
-        {TOOL_LINKS.map((t) => (
-          <Link
-            className={path === `/tools/${t.slug}` ? "active" : ""}
-            href={`/tools/${t.slug}`}
-            key={t.slug}
-          >
-            <t.icon size={17} />
-            {t.label}
-          </Link>
-        ))}
-      </div>
+      <nav className="tindie-tabs" aria-label="Discover sections">
+        <div className="wrap" role="tablist">
+          {TOOL_LINKS.map((t) => {
+            const active = t.match.includes(path);
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                role="tab"
+                aria-selected={active}
+                aria-current={active ? "page" : undefined}
+                className={active ? "active" : ""}
+              >
+                <t.icon size={17} aria-hidden="true" />
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
       {children}
-      <footer className="maker-footer">
-        <span>
-          <b>tindie</b> · A little help for your next big idea.
-        </span>
-        <span>Open files. Real parts. Your next project.</span>
-      </footer>
     </div>
   );
 }
+
+/** Page title band, styled like the live "Hardware Discovery" header. */
 export function ToolHeading({
   eyebrow,
   title,
@@ -71,7 +63,7 @@ export function ToolHeading({
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
-      <div className="heading-actions">{actions}</div>
+      {actions && <div className="heading-actions">{actions}</div>}
     </div>
   );
 }

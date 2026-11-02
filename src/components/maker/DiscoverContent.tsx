@@ -1,52 +1,56 @@
 import { HomeBody } from "@/components/HomeBody";
 import { SEED_RESOURCES } from "@/lib/seed-data";
-export async function DiscoverContent({
-  compact = false,
-}: {
-  compact?: boolean;
-}) {
-  let resources: any[] = SEED_RESOURCES.map((r, i) => ({
-      ...r,
-      id: i + 1,
-      status: "active",
-    })),
+
+function hasDatabaseConfig() {
+  return Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
+}
+
+/**
+ * The existing Discover page (Resources tab), unchanged in content and behaviour: same queries,
+ * same signed-in saves and recommendation banner as the live app. Without a database (local
+ * preview) the repository's resource directory is shown and nothing else is invented.
+ */
+export async function DiscoverContent() {
+  let resources: any[] = SEED_RESOURCES.map((r, i) => ({ ...r, id: i + 1, status: "active" })),
     discoveries: any[] = [],
     blogPosts: any[] = [],
     recommendation: any = null,
-    unavailable = false;
-  if (
-    process.env.APP_DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.DATABASE_URL
-  ) {
+    savedIds: number[] = [],
+    signedIn = false,
+    unavailable = !hasDatabaseConfig();
+  if (!unavailable) {
     try {
-      const q = await import("@/lib/queries");
-      [resources, discoveries, blogPosts, recommendation] = await Promise.all([
+      const [q, { auth }] = await Promise.all([import("@/lib/queries"), import("@/lib/auth")]);
+      const session = await auth().catch(() => null);
+      const userId = (session?.user as any)?.id as string | undefined;
+      signedIn = !!userId;
+      [resources, discoveries, savedIds, recommendation, blogPosts] = await Promise.all([
         q.getResources(),
         q.getPublishedDiscoveries(6),
-        q.getRecentBlogPosts(12),
+        userId ? q.getUserSaves(userId) : Promise.resolve([] as number[]),
         q.getActiveRecommendation(),
+        q.getRecentBlogPosts(12),
       ]);
-    } catch {
+    } catch (e) {
+      console.error("[discover] database unavailable", e instanceof Error ? e.message : e);
       unavailable = true;
     }
-  } else unavailable = true;
+  }
   return (
-    <div
-      className={compact ? "discover-preserved compact" : "discover-preserved"}
-    >
+    <div className="discover-preserved">
       {unavailable && (
-        <div className="local-note">
-          Local preview · Resource directory loaded from the repository. Connect
-          the existing Discover database to show published discoveries and blog
-          posts.
+        <div className="wrap">
+          <div className="local-note">
+            Local preview · Resource directory loaded from the repository. Connect the Discover database to show
+            published discoveries and blog posts.
+          </div>
         </div>
       )}
       <HomeBody
         resources={resources}
-        topDiscoveries={discoveries}
-        savedIds={[]}
-        signedIn={false}
+        topDiscoveries={(discoveries as any[]).slice(0, 6)}
+        savedIds={savedIds}
+        signedIn={signedIn}
         recommendation={recommendation}
         blogPosts={blogPosts}
         chrome={false}
