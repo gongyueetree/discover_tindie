@@ -58,6 +58,9 @@ PARTS = [
      "https://www.ti.com/lit/ds/symlink/lm358.pdf", {"Channels": "2", "GBW": "700 kHz"}),
     ("LM358DT", "STMicroelectronics", "仪器，运算放大器，缓冲器", "Low-power dual operational amplifier", "LM358", "SOIC-8_3.9x4.9mm_P1.27mm", "", {}),
     ("USBLC6-2SC6", "STMicroelectronics", "瞬态电压抑制器（TVS）", "ESD protection for high-speed USB, SOT-23-6", "USBLC6-2SC6", "SOT-23-6", "", {}),
+    ("RP2040", "Raspberry Pi", "微控制器（MCU）", "Dual Arm Cortex-M0+ MCU, 264 KB SRAM, QFN-56", "RP2040", "QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm", "", {}),
+    ("RP2350A", "Raspberry Pi", "微控制器（MCU）", "Dual Arm Cortex-M33 / RISC-V MCU, 520 KB SRAM, QFN-60", "", "QFN-60-1EP_7x7mm_P0.4mm_EP3.4x3.4mm", "", {}),
+    ("W25Q128JVSIQ", "Winbond", "存储器", "128 Mbit SPI NOR flash, SOIC-8", "W25Q128JVS", "SOIC-8_5.23x5.23mm_P1.27mm", "", {}),
 ]
 
 # Real public designs (files fetched from GitHub at the pinned commit by the Tindie viewer).
@@ -83,6 +86,8 @@ FIXTURE_COMBOS = [
     ["NE555P", "LM358DR"],
     ["STM32F103C8T6", "LM358DR", "NE555P", "AMS1117-3.3"],
     ["CY7C65213-28PVXI", "MAX202ECDR", "TPS2061CDBVT"],
+    ["RP2040", "W25Q128JVSIQ", "AMS1117-3.3", "USBLC6-2SC6"],
+    ["RP2350A", "W25Q128JVSIQ", "AMS1117-3.3"],
 ]
 PASSIVES = [("C1,C2", "100nF"), ("R1", "10K"), ("R2,R3", "4.7K"), ("C3", "10uF")]
 
@@ -129,7 +134,7 @@ def main():
                ("U4", "NE555P"), ("C1", "100nF"), ("R1", "10K")], lic="TI 参考设计条款", vendor_url="https://www.ti.com/tool/TIDA-00000")
 
     rnd = random.Random(7)
-    for i in range(40):
+    for i in range(48):
         combo = FIXTURE_COMBOS[i % len(FIXTURE_COMBOS)]
         repo = f"fixture/board-{i}"
         stars = rnd.randint(0, 400)
@@ -140,17 +145,18 @@ def main():
     db.commit()
 
     # Circuit modules per design (normally recognised by partdata's module rules from the BOM).
-    MOD = {"STM32F103": "mcu.mcu.arm", "ATMEGA328P": "mcu.mcu.mcu8", "ESP32S3": "mcu.wireless", "AMS1117": "pwr.linear.ldo",
+    MOD = {"RP2040": "mcu.mcu.arm", "RP2350": "mcu.mcu.arm", "W25Q128": "mem.flash", "STM32F103": "mcu.mcu.arm", "ATMEGA328P": "mcu.mcu.mcu8", "ESP32S3": "mcu.wireless", "AMS1117": "pwr.linear.ldo",
            "CH340G": "wire.usb.uart", "NE555P": "clk.timer", "LM358": "ana.opamp", "USBLC6": "prot.esd",
            "CY7C65213": "wire.usb.uart", "MAX202": "wire.rs232", "TPS2061": "pwr.switch", "Z84C": "logic.retro"}
     for b in db.query(OshwBom).filter(OshwBom.bom_id.like("fx-%")).all():
-        mods = set()
+        mods: dict[str, list[str]] = {}
         for it in db.query(OshwItem).filter(OshwItem.bom_id == b.bom_id):
             for k, m in MOD.items():
                 if (it.key_norm or "").startswith(k.replace("-", "")):
-                    mods.add(m)
-        for m in mods:
-            db.add(OshwBomModule(bom_id=b.bom_id, project_id=b.project_id, module_id=m, n_items=1))
+                    mods.setdefault(m, []).append(f"{it.designators.split(',')[0]} {it.value}")
+        for m, ev in mods.items():
+            # evidence as partdata's module rules record it: "U3 AMS1117-3.3；U5 TP4056"
+            db.add(OshwBomModule(bom_id=b.bom_id, project_id=b.project_id, module_id=m, n_items=len(ev), evidence="；".join(ev)))
     db.commit()
     # PCB previews as partdata's oshw_cover draws them, from a local clone of the real repository when present.
     import gzip
