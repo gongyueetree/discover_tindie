@@ -311,6 +311,8 @@ function nodeOf(id: string, label: string, manufacturer: string | null, kind: st
  * - focus given: the family's one-hop neighbourhood (same-board co-occurrence).
  * - no focus: the most common IC families, linked where they co-occur with each other.
  */
+const MODULE_MIN_ICS = 8;
+
 export async function kgGraph(focus: string, visitor: string, module = ""): Promise<GraphData> {
   const snap = await pdGet(`${KG}/snapshots/current`, {}, visitor);
   const N = Number(snap.data.designs) || 0;
@@ -346,8 +348,13 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
   if (module) {
     // Circuit-module view: the families used most by designs classified into this module
     // (with its sub-modules), and how those families co-occur with each other.
-    const rank = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(module)}/families`, { limit: 20 }, visitor);
-    const items = rank.data.items || [];
+    // The ranking counts every family on the module's boards; resistors and capacitors top it but say
+    // nothing about the module. Show ICs; only when a module has few, add discretes / crystals. Never passives.
+    const rank = await pdGet(`${KG}/rankings/functions/${encodeURIComponent(module)}/families`, { limit: 200 }, visitor);
+    const all: any[] = rank.data.items || [];
+    const ics = all.filter((f) => f.kind === "ic");
+    const fill = all.filter((f) => f.kind === "discrete" || f.kind === "crystal");
+    const items = [...ics.slice(0, 20), ...(ics.length < MODULE_MIN_ICS ? fill.slice(0, MODULE_MIN_ICS - ics.length) : [])];
     for (const f of items) add(node(f.family, f.label, f.manufacturer, f.kind, f.adoption_count));
     moduleScope = {
       id: module,
@@ -359,7 +366,7 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
         count: Number(f.adoption_count) || 0,
       })),
     };
-    eligible = Number(rank.meta?.pagination?.total) || nodes.length;
+    eligible = ics.length + (ics.length < MODULE_MIN_ICS ? fill.length : 0);
     const hoods = await Promise.allSettled(
       nodes.slice(0, 12).map((n) => pdGet(`${KG}/neighborhood`, { entity_id: `fam:${n.id}`, limit: 80, sort: "n" }, visitor)),
     );

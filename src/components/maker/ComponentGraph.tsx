@@ -148,7 +148,7 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
         <ToolHeading
           eyebrow="Circuit module · common parts"
           title={`Most used parts in ${moduleName || mod.id}`}
-          description={`Component families found most often in the ${mod.designs.toLocaleString()} open-source designs classified into this circuit module (sub-modules included), and which of them appear on the same boards.`}
+          description={`ICs found most often in the ${mod.designs.toLocaleString()} open-source designs classified into this circuit module (sub-modules included), and which of them appear on the same boards. Resistors, capacitors and other passives are left out.`}
         />
       ) : (
         <ToolHeading
