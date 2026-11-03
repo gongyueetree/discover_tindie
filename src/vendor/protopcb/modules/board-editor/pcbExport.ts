@@ -44,7 +44,8 @@ function edgeCuts(doc: CircuitCanvasDocument): string[] {
     return L;
   }
   if (doc.board.shape === 'rounded') {
-    const r = Math.min(W, H) * 0.08;
+    // As set (all four corners alike), else 8% of the shorter side; never more than half of it.
+    const r = Math.min(Math.min(W, H) / 2, Math.max(0.1, doc.board.cornerRadiusMm ?? Math.min(W, H) * 0.08));
     // 四条边 + 四个圆角（gr_arc: start=弧起点 mid=弧中点 end=弧终点）
     line(r, 0, W - r, 0);
     line(W, r, W, H - r);

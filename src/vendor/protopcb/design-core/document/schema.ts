@@ -110,6 +110,9 @@ export const boardSchema = z.object({
   cutWidthMm: z.number().optional(),
   cutHeightMm: z.number().optional(),
   cornerRadiusMm: z.number().optional(),
+  /** Corner mounting holes: distance from the board edge to the hole centre, and drill diameter (Tindie planner). */
+  holeMarginMm: z.number().optional(),
+  holeDiameterMm: z.number().optional(),
 });
 
 export const connectionSchema = z.object({

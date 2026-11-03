@@ -613,3 +613,6 @@ dialog.maker { font-size: 14px; }
 }
 .maker .compare-table .val{display:inline-flex;align-items:center;gap:2px;overflow-wrap:anywhere}
 .maker .atlas-hidden-note{font-size:12px;margin:12px 0 0;color:#78858b}
+.maker .board-controls .check{display:inline-flex;align-items:center;gap:6px}
+.maker .board-controls-spacer{flex:1 1 auto}
+.maker .board-controls .btn svg{vertical-align:-2px}

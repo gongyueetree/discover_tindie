@@ -95,7 +95,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       // CAD drawn by eelib's preview engine from the official KiCad library entry partdata names.
       const part = await partDetail(a, visitor);
       const ez = part.ezplmLibrary ? { partId: a, ...part.ezplmLibrary } : null;
-      result = { mpn: part.mpn, ...(await cadPreview(part.symbolName, part.footprintName, ez)) };
+      result = { mpn: part.mpn, ...(await cadPreview(part.symbolName, part.footprintName, ez, part.mpn)) };
     } else if (req.method === "GET" && head === "cad" && path.length === 3 && PART_ID.test(a) && ["symbol", "footprint", "model"].includes(path[2])) {
       // A part's file from ezPLM's own library (partdata signs and meters the request).
       const kind = path[2] as "symbol" | "footprint" | "model";
@@ -181,7 +181,9 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
             ? await vendorImage(d.sourceUrl)
             : d.coverImageUrl ||
               (gh ? (await githubReadme(gh.repo, gh.commit, gh.subdir)).image : null) ||
-              (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null),
+              (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null) ||
+              // Last resort: the repository's social preview (its own image if set, else GitHub's card).
+              (gh ? `https://opengraph.githubassets.com/1/${gh.repo}` : null),
       };
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "usable") {
       // Whether the design's repository holds files the viewer can open (null = could not tell).

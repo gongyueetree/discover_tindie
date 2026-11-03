@@ -120,7 +120,8 @@ function toDesign(d: any): DesignCard {
     id: String(d.id),
     name: String(d.name || "Untitled design"),
     kind: d.kind === "vendor" ? "vendor" : "open_source",
-    vendor: d.kind === "vendor" ? vendorName(d.vendor, d.source_url) : null,
+    // Vendor reference designs, and open-source designs published by a manufacturer's own GitHub organisation.
+    vendor: d.kind === "vendor" ? vendorName(d.vendor, d.source_url) : githubVendor(d.source_url),
     sourceUrl: link(d.source_url) || "",
     license: d.license || null,
     stars: typeof d.stars === "number" ? d.stars : null,
@@ -145,7 +146,23 @@ export const DESIGN_RULES = {
 // Vendor reference designs are trusted as published by the manufacturer: always listed, without a star rule.
 const keep = (d: DesignCard) =>
   d.kind === "vendor" ||
+  (!!d.vendor && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase())) ||
   ((d.stars ?? 0) >= DESIGN_RULES.minStars && DESIGN_RULES.eda.includes((d.edaTool || "").toLowerCase()));
+
+/** Manufacturers' own GitHub organisations → display names (their published reference designs). */
+const VENDOR_GITHUB: Record<string, string> = {
+  texasinstruments: "Texas Instruments", "ti-tidesigns": "Texas Instruments",
+  nordicsemiconductor: "Nordic Semiconductor", stmicroelectronics: "STMicroelectronics", "stm32-hotspot": "STMicroelectronics",
+  analogdevicesinc: "Analog Devices", nxp: "NXP Semiconductors", "nxp-mcuxpresso": "NXP Semiconductors", nxpmicro: "NXP Semiconductors",
+  microchiptech: "Microchip Technology", "microchip-pic-avr-examples": "Microchip Technology",
+  espressif: "Espressif Systems", raspberrypi: "Raspberry Pi", infineon: "Infineon Technologies", renesas: "Renesas Electronics",
+  siliconlabs: "Silicon Labs", openwch: "WCH", latticesemi: "Lattice Semiconductor", onsemi: "onsemi", "rohm-semiconductor": "ROHM",
+  "maxim-integrated": "Analog Devices", gigadevice: "GigaDevice", "melexis": "Melexis", "bosch-sensortec": "Bosch Sensortec",
+};
+function githubVendor(url: unknown): string | null {
+  const m = String(url || "").match(/^https:\/\/github\.com\/([^/]+)\//i);
+  return m ? VENDOR_GITHUB[m[1].toLowerCase()] ?? null : null;
+}
 
 /** Manufacturer sites → display names, for vendor reference designs. */
 const VENDOR_SITES: [RegExp, string][] = [
@@ -454,17 +471,43 @@ export async function kgGraph(focus: string, visitor: string, module = ""): Prom
  * (STM32F103C8T6) is longer than its family key (STM32F103). So query by a short stem
  * and pick: a family whose members include the MPN, else the longest key that prefixes it.
  */
+/**
+ * partdata's family rule (ezplm_pilot/kg.py family_of + series_symbol.series_keys): the normalised
+ * MPN minus its trailing letter suffix after the last digit run (STM32F103CBT6 → STM32F103,
+ * LM358DR → LM358); 74 / 40-series logic drops the vendor prefix (SN74HC595 → 74HC595).
+ */
+const FAMILY_TAIL = /^(.*?\d)[A-Z]{1,4}\d{0,2}[A-Z]{0,4}\d{0,2}$/;
+const FAMILY_LEAD = /^[A-Z]{1,3}(?=\d)/;
+const FAMILY_LOGIC = /^(74|54|40\d\d|45\d\d)/;
+export function familyOf(mpn: string) {
+  const k = norm(mpn);
+  const m = k.match(FAMILY_TAIL);
+  const base = m ? m[1] : k;
+  if (base.length < 5 || (base.match(/\d/g) || []).length < 3) return "";
+  const core = base.replace(FAMILY_LEAD, "");
+  return core.length >= 5 && core !== base && FAMILY_LOGIC.test(core) ? core : base;
+}
+
+/**
+ * MPN or family text → the knowledge graph's family, by partdata's own family rule first, so a
+ * part is always related through its family (STM32F103CBT6 → STM32F103), never through a board or
+ * module that happens to carry a similar name (STM32F103C8T6_BLUE_PILL).
+ */
 export async function resolveFamily(text: string, visitor: string): Promise<string | null> {
   const q = norm(text);
   if (q.length < 3) return null;
-  for (const stem of [q, q.slice(0, 5)].filter((v, i, a) => v.length >= 3 && a.indexOf(v) === i)) {
+  const fam = familyOf(text);
+  const stems = [fam, q, q.slice(0, 5)].filter((v, i, a) => v && v.length >= 3 && a.indexOf(v) === i);
+  for (const stem of stems) {
     const r = await pdGet(`${KG}/rankings/families`, { q: stem, limit: 200 }, visitor);
-    const items: any[] = r.data.items || [];
+    const items: any[] = (r.data.items || []).filter((f: any) => !/_/.test(String(f.label || "")) || norm(String(f.label)) === q);
+    if (fam && items.some((f) => f.family === fam)) return fam;
     const exact = items.find((f) => f.family === q || (f.members || []).some((m: string) => norm(m) === q));
     if (exact) return exact.family as string;
+    // Prefix families of the MPN: the most used one (a family, not a one-off board name).
     const prefix = items
       .filter((f) => q.startsWith(f.family) && f.family.length >= 3)
-      .sort((a, b) => b.family.length - a.family.length)[0];
+      .sort((a, b) => (Number(b.adoption_count) || 0) - (Number(a.adoption_count) || 0) || b.family.length - a.family.length)[0];
     if (prefix) return prefix.family as string;
   }
   return null;

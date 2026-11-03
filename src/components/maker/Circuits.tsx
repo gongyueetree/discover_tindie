@@ -390,9 +390,10 @@ function DesignCard({ d, onOpen, onUnusable }: { d: Design; onOpen: () => void; 
         )}
       </button>
       <div className="atlas-card-body">
-        {d.kind === "vendor" && (
-          <span className="vendor-badge" title="Published by the manufacturer">
-            <BadgeCheck size={13} aria-hidden /> Reference design{d.vendor ? ` · ${d.vendor}` : ""}
+        {(d.kind === "vendor" || d.vendor) && (
+          <span className="vendor-badge" title={d.kind === "vendor" ? "Published by the manufacturer" : `Published by ${d.vendor} on its own GitHub organisation`}>
+            <BadgeCheck size={13} aria-hidden /> {d.kind === "vendor" ? "Reference design" : "Manufacturer design"}
+            {d.vendor ? ` · ${d.vendor}` : ""}
           </span>
         )}
         <div>
