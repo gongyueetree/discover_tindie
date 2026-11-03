@@ -36,8 +36,12 @@ export const metadata: Metadata = {
     title: "Tindie",
   },
   icons: {
+    // A real icon link, so browsers do not fall back to /favicon.ico (404).
+    icon: [{ url: "/icons/icon-192.png", type: "image/png", sizes: "192x192" }],
     apple: "/icons/icon-192.png",
   },
+  // The standard name for apple-mobile-web-app-capable (Chrome warns the Apple one is deprecated).
+  other: { "mobile-web-app-capable": "yes" },
   openGraph: {
     type: "website",
     url: SITE_URL,
