@@ -253,7 +253,13 @@ export default function Viewer({
           e.target.value = "";
         }}
       />
-      {design && <DesignPanel design={design} github={github} />}
+      {design && (
+        <DesignPanel
+          design={design}
+          github={github}
+          loaded={bundle ? { files: assets.length || bundle.inventory.length, components: bundle.parts.length, boards: bundle.pcbs.length } : null}
+        />
+      )}
       {!bundle && !design && (
         <GithubImport autoFocus={focusGithub} onImport={async (files) => void (await open(files, "github"))} disabled={busy} />
       )}
@@ -310,7 +316,7 @@ export default function Viewer({
         </>
       ) : (
         <>
-          <div className="workspace-summary">
+          <div className="workspace-summary" hidden={!!design}>
             <span className="badge">{bundle.project.sourceFormat}</span>
             <span>{assets.length || bundle.inventory.length} files</span>
             <span>{bundle.parts.length} components</span>
@@ -475,15 +481,24 @@ function DesignAbout({ design }: { design: DesignInfo }) {
         </p>
       ))}
       {about?.readmeUrl && (
-        <a className="inline-link" href={about.readmeUrl} target="_blank" rel="noopener noreferrer">
-          Full README on GitHub <ExternalLink size={11} />
+        <a className="inline-link readme-link" href={about.readmeUrl} target="_blank" rel="noopener noreferrer">
+          Full README on GitHub <ExternalLink size={11} aria-hidden />
         </a>
       )}
     </section>
   );
 }
 
-function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef }) {
+function DesignPanel({
+  design,
+  github,
+  loaded,
+}: {
+  design: DesignInfo;
+  github: GithubRef;
+  /** Once the project files are open: one row with what they hold, instead of a second summary row. */
+  loaded: { files: number; components: number; boards: number } | null;
+}) {
   return (
     <>
     <DesignAbout design={design} />
@@ -505,7 +520,13 @@ function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef
         </span>
       )}
       {design.edaTool && <span className="pill muted">{design.edaTool}</span>}
-      <span className="pill muted">{design.partCount} identified parts</span>
+      {loaded ? (
+        <span className="pill muted">
+          {loaded.files} files · {loaded.components} components · {loaded.boards} {loaded.boards === 1 ? "board" : "boards"}
+        </span>
+      ) : (
+        <span className="pill muted">{design.partCount} identified parts</span>
+      )}
       {github?.commit && <span className="pill muted">commit {github.commit.slice(0, 10)}</span>}
       {design.sourceUrl && (
         <a className="btn small outline" href={design.sourceUrl} target="_blank" rel="noreferrer">

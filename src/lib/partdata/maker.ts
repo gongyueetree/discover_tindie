@@ -1,6 +1,7 @@
 import "server-only";
 import { pdGet, pdPost, PartdataError, partdataConfigured } from "./client";
 import { compareParts, type ComparePart } from "@/lib/maker/compare";
+import { ezplmFile } from "./kicad-lib";
 import { categoryEn, hasCjk, lifecycleEn, manufacturerCanonical, manufacturerEn } from "./glossary";
 import { terminology } from "@/lib/maker/english";
 import type { Part, ProviderStatus } from "@/lib/maker/types";
@@ -607,9 +608,14 @@ export async function plannerParts(q: string, visitor: string) {
   const kicad = parts.filter((p) => p.footprintName && resolveName("footprint", p.footprintName));
   // Footprints not in the official KiCad library may be in ezPLM's own library (details say so).
   const others = parts.filter((p) => p.footprintName && !resolveName("footprint", p.footprintName)).slice(0, 8);
-  const ez = (await Promise.allSettled(others.map((p) => partDetail(p.id, visitor)))).flatMap((s) =>
+  const flagged = (await Promise.allSettled(others.map((p) => partDetail(p.id, visitor)))).flatMap((s) =>
     s.status === "fulfilled" && s.value.ezplmLibrary?.footprint ? [s.value] : [],
   );
+  // Listed only when the file really downloads (ezPLM's library can list a footprint whose file
+  // partdata cannot fetch); the download is cached, so adding the part is then instant.
+  const ez = (
+    await Promise.allSettled(flagged.map(async (p) => (await ezplmFile(p.id, "footprint")).body.length > 20 ? p : null))
+  ).flatMap((s) => (s.status === "fulfilled" && s.value ? [s.value] : []));
   const keep = new Set([...kicad, ...ez].map((p) => p.id));
   return parts.map((p) => ez.find((x) => x.id === p.id) || p).filter((p) => keep.has(p.id));
 }

@@ -229,3 +229,12 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
   - 定位孔：开关、孔中心到板边距离、孔径（1–8 mm）可调，按 eelib 规则贴合板形（圆形板无四角孔）。
   - 清空板上器件、重新排布未锁定器件、撤销 / 重做（按钮或 Ctrl+Z / Ctrl+Shift+Z；拖动一次算一步）。
   - 导出 KiCad 的板框圆角与孔径和画面一致，3D 预览随之变化。
+
+## 11. 上线前只给自己看（预览开关）
+
+新三个 TAB（Components / Open hardware / PCB planner）默认**只有你能看到**，其他访客看到的还是原来的 Discover 页面（没有 TAB 栏）；新 TAB 的页面会跳回首页，接口返回 404。
+
+- **谁能看到**：登录了后台的管理员 / 编辑（用原来的后台账号登录即可）；或在浏览器打开过 `/tools/preview?key=<MAKER_PREVIEW_KEY>` 的人（写入 30 天的 Cookie，可发给同事测试）。
+- **全部上线**：在 Vercel 加环境变量 `MAKER_TOOLS_PUBLIC=1` 并 Redeploy；想收回就删掉它再 Redeploy。
+- `MAKER_PREVIEW_KEY` 至少 16 个字符，可用 `openssl rand -hex 16` 生成。
+- 在 tindie.com 的 iframe 里，浏览器可能拦截第三方 Cookie，预览时请直接打开站点域名测试。

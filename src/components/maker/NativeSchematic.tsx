@@ -498,11 +498,6 @@ export default function NativeSchematic({
             ))}
         </aside>
       </div>
-      <small>
-        Source drawing engine from eelib ·{" "}
-        {Object.values(d.skipped).reduce((a, b) => a + b, 0)} unsupported source
-        items
-      </small>
     </article>
   );
 }

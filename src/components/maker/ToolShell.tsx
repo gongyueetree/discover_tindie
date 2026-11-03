@@ -15,8 +15,10 @@ export const TOOL_LINKS = [
   { href: "/tools/planner", label: "PCB planner", icon: LayoutGrid, match: ["/tools/planner", "/tools/bom"] },
 ];
 
-export function ToolShell({ children }: { children: React.ReactNode }) {
+export function ToolShell({ children, tools = true }: { children: React.ReactNode; tools?: boolean }) {
   const path = usePathname() || "/";
+  // While the new tabs are in preview, the public sees the original page without a tab bar.
+  if (!tools) return <div className="maker">{children}</div>;
   return (
     <div className="maker">
       <nav className="tindie-tabs" aria-label="Discover sections">
