@@ -215,10 +215,6 @@ export default function PlannerLibrary({
               </button>
             ))}
       </div>
-      <small>
-        KiCad 10.0.0 library · CC BY-SA 4.0 with library exception. Source links
-        are retained in saved layouts.
-      </small>
     </section>
   );
 }

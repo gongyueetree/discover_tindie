@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { partFamily } from "@/lib/maker/part-family";
 import PartDetailsModal from "./PartDetailsModal";
-import FamilyVariants from "./FamilyVariants";
+import FamilyVariants, { type NodeSummary } from "./FamilyVariants";
 import PartCompare from "./PartCompare";
 import { ToolHeading } from "./ToolShell";
 
@@ -40,6 +40,7 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
   if (focusIndex >= 0) initial[focusIndex] = { x: 450, y: 330 };
   const [lookup, setLookup] = useState<string | null>(null);
   const [compare, setCompare] = useState<{ reference: string; candidates: string[]; family: string } | null>(null);
+  const [summary, setSummary] = useState<{ id: string; value: NodeSummary } | null>(null);
   const compareRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (compare) compareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -425,6 +426,18 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
             {part[1]} · family {data.nodes[selected].id}
             {data.nodes[selected].manufacturer ? ` · ${data.nodes[selected].manufacturer}` : ""}
           </span>
+          {summary?.id === data.nodes[selected].id ? (
+            summary.value ? (
+              <p className="graph-node-desc">
+                {summary.value.text}
+                {!summary.value.exact && <small> · from {summary.value.mpn}, same family</small>}
+              </p>
+            ) : (
+              <p className="graph-node-desc muted">No description is published for this part.</p>
+            )
+          ) : (
+            <p className="graph-node-desc muted">Loading description…</p>
+          )}
           <div className="graph-stats">
             <div>
               <strong>{part[2]}</strong>
@@ -459,6 +472,7 @@ export default function ComponentGraph({ data, moduleName = "" }: { data: GraphD
           <FamilyVariants
             key={data.nodes[selected].id}
             node={data.nodes[selected]}
+            onSummary={(x) => setSummary({ id: data.nodes[selected].id, value: x })}
             onCompare={(mpn) => setCompare({ reference: data.nodes[selected].label, candidates: [mpn], family: "" })}
           />
           <FamilyInfo key={"info-" + data.nodes[selected].id} family={data.nodes[selected].id} />

@@ -446,27 +446,39 @@ function DesignCard({ d, onOpen, onUnusable }: { d: Design; onOpen: () => void; 
  */
 function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
   const board = d.boardPreview ? `/api/maker/circuits/${d.id}/board.svg` : null;
+  // Last resort for a GitHub design: the repository's social card (its own image if set, else GitHub's).
+  const repo = vendor ? null : d.sourceUrl?.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/|$)/)?.[1];
+  const card = repo ? `https://opengraph.githubassets.com/1/${repo}` : null;
   // Vendor designs: the picture their own page publishes (looked up on the server).
   const [sources, setSources] = useState<string[] | null>(
     // No picture in the list → ask the server (README picture, then the PCB preview).
     vendor || !d.coverImageUrl ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
   );
   const [index, setIndex] = useState(0);
+  // Whether the server has been asked yet; asked again when every picture from the list fails to load.
+  const asked = useRef(false);
   const host = useRef<HTMLSpanElement>(null);
   useEffect(() => {
-    if (sources !== null || !host.current) return;
+    const exhausted = sources !== null && index >= sources.length;
+    if ((sources !== null && !exhausted) || !host.current) return;
+    if (exhausted && asked.current) return;
     const el = host.current;
+    const tried = sources || [];
     const io = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
       io.disconnect();
+      asked.current = true;
       fetch(`/api/maker/circuits/${d.id}/cover`)
         .then((r) => (r.ok ? r.json() : { url: null }))
-        .then((x) => setSources([...new Set([x.url, vendor ? null : board].filter((v): v is string => !!v))]))
-        .catch(() => setSources([]));
+        .catch(() => ({ url: null }))
+        .then((x) => {
+          const next = [x.url, vendor ? null : board, card].filter((v): v is string => !!v && !tried.includes(v));
+          setSources([...new Set([...tried, ...next])]);
+        });
     });
     io.observe(el);
     return () => io.disconnect();
-  }, [sources, d.id]);
+  }, [sources, index, d.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const src = sources?.[index];
   if (src)
     return (

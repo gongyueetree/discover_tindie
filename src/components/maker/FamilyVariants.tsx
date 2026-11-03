@@ -4,7 +4,24 @@ import PartDetailsModal from "./PartDetailsModal";
 import type { GraphNode } from "@/lib/maker/component-graph";
 import type { Part } from "@/lib/maker/types";
 const cache = new Map<string, { until: number; parts: Part[] }>();
-export default function FamilyVariants({ node, onCompare }: { node: GraphNode; onCompare?: (mpn: string) => void }) {
+/** What the parts database says the node's part is: its own record first, else the family's first. */
+function summaryOf(node: GraphNode, parts: Part[]) {
+  const own = parts.find((p) => p.mpn.toUpperCase() === node.label.toUpperCase());
+  const p = own?.description ? own : parts.find((x) => x.description);
+  return p?.description ? { text: p.description, mpn: p.mpn, exact: p === own } : null;
+}
+export type NodeSummary = ReturnType<typeof summaryOf>;
+
+export default function FamilyVariants({
+  node,
+  onCompare,
+  onSummary,
+}: {
+  node: GraphNode;
+  onCompare?: (mpn: string) => void;
+  /** Called with the part's description once the family's parts are loaded (null when none is published). */
+  onSummary?: (summary: NodeSummary) => void;
+}) {
   const [lookup, setLookup] = useState<string | null>(null);
   const [parts, setParts] = useState<Part[]>([]),
     [status, setStatus] = useState("Loading catalog variants…");
@@ -15,6 +32,7 @@ export default function FamilyVariants({ node, onCompare }: { node: GraphNode; o
     const old = cache.get(node.id);
     if (old && old.until > Date.now()) {
       setParts(old.parts);
+      onSummary?.(summaryOf(node, old.parts));
       setStatus("");
       return;
     }
@@ -31,8 +49,10 @@ export default function FamilyVariants({ node, onCompare }: { node: GraphNode; o
         );
         if (ac.signal.aborted) return;
         setParts(rows);
+        onSummary?.(summaryOf(node, rows));
+        // Only the parts database itself counts; DigiKey / Mouser not being set up is not an outage.
         const unavailable = (d.sources || []).filter(
-          (s: { status: string }) => s.status !== "ready",
+          (s: { source: string; status: string }) => s.source === "Tindie parts database" && s.status !== "ready",
         );
         setStatus(
           unavailable.length
@@ -45,8 +65,9 @@ export default function FamilyVariants({ node, onCompare }: { node: GraphNode; o
         }
       })
       .catch((e) => {
-        if (!ac.signal.aborted)
-          setStatus(e.message);
+        if (ac.signal.aborted) return;
+        setStatus(e.message);
+        onSummary?.(null);
       });
     return () => ac.abort();
   }, [node.id, node.label, node.manufacturer]);

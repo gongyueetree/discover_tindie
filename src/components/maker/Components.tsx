@@ -53,6 +53,7 @@ export default function Components() {
     setBusy(true);
     setError("");
     setSelected(null);
+    setItems([]);
     try {
       const r = await fetch("/api/maker/parts?q=" + encodeURIComponent(query));
       const d = await r.json();
@@ -226,9 +227,24 @@ export default function Components() {
         <div className="part-layout">
           <section>
             <div className="section-top">
-              <h2>{items.length ? `${items.length} ${items.length === 1 ? "result" : "results"}` : "No matches"}</h2>
+              <h2>
+                {busy
+                  ? "Searching…"
+                  : items.length
+                    ? `${items.length} ${items.length === 1 ? "result" : "results"}`
+                    : error
+                      ? "Search failed"
+                      : "No matches"}
+              </h2>
               <span>Exact part number first</span>
             </div>
+            {busy && !items.length && (
+              <div className="part-card-skeletons" aria-hidden>
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
             {items.map((p) => (
               <button
                 key={p.id + p.source}
@@ -253,7 +269,7 @@ export default function Components() {
                 <ArrowRight size={17} />
               </button>
             ))}
-            {!items.length && !error && (
+            {!busy && !items.length && !error && (
               <div className="notice">
                 Nothing found. Try the full manufacturer part number, or the first few characters of it.
               </div>

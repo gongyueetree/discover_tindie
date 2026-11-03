@@ -23,7 +23,8 @@ import { holeSettingsOf, cornerRadiusOf, HOLE_DIAMETER_RANGE } from "@/vendor/ee
 import { plannerPcb } from "@/lib/maker/planner-export";
 import { makeComponent } from "@/lib/maker/planner";
 import { useEffect, useRef, useState } from "react";
-import { Download, Redo2, RotateCw, Shuffle, Trash2, Undo2, Upload } from "lucide-react";
+import { Download, Maximize2, Minimize2, Redo2, RotateCw, Shuffle, Trash2, Undo2, Upload } from "lucide-react";
+import LeaveGuard from "./LeaveGuard";
 import { ToolHeading } from "./ToolShell";
 import {
   createDocument,
@@ -53,7 +54,11 @@ export default function Planner() {
     [error, setError] = useState(""),
     [snap, setSnap] = useState(1),
     [view, setView] = useState("2d"),
-    [gap, setGap] = useState(0.5);
+    [gap, setGap] = useState(0.5),
+    [full, setFull] = useState(false);
+  /** The layout as last saved or opened; anything else with parts on it is unsaved work. */
+  const [clean, setClean] = useState<CircuitCanvasDocument | null>(null);
+  const unsaved = doc.components.length > 0 && doc !== clean;
   const [detailPart, setDetailPart] = useState<{
     mpn: string;
     manufacturer: string;
@@ -288,8 +293,29 @@ export default function Planner() {
     p.y = e.clientY;
     return p.matrixTransform(svg.current!.getScreenCTM()!.inverse());
   }
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [full]);
+
+  function saveLayout() {
+    download(
+      new TextEncoder().encode(JSON.stringify({ ...doc, placementRules: { clearanceMm: gap } }, null, 2)),
+      "layout.json",
+      "application/json",
+    );
+    setClean(doc);
+  }
+
   return (
     <>
+      <LeaveGuard when={unsaved} onSave={saveLayout} />
       <ToolHeading
         eyebrow="PCB PRE-LAYOUT"
         title="Make room for your idea."
@@ -302,19 +328,7 @@ export default function Planner() {
             </button>
             <button
               className="btn"
-              onClick={() =>
-                download(
-                  new TextEncoder().encode(
-                    JSON.stringify(
-                      { ...doc, placementRules: { clearanceMm: gap } },
-                      null,
-                      2,
-                    ),
-                  ),
-                  "layout.json",
-                  "application/json",
-                )
-              }
+              onClick={saveLayout}
             >
               <Download size={15} />
               Save layout
@@ -354,6 +368,7 @@ export default function Planner() {
                 throw Error(issue);
               }
               setDoc(restored);
+              setClean(restored);
               setGap(restoredGap);
               setActive("");
               setError("");
@@ -372,7 +387,7 @@ export default function Planner() {
         <aside className="planner-rail">
           <PlannerLibrary onAdd={addSource} />
         </aside>
-        <div className="board-canvas-wrap">
+        <div className={"board-canvas-wrap" + (full ? " board-full" : "")}>
           <div className="board-controls">
             {[
               ["2d", "2D"],
@@ -388,9 +403,10 @@ export default function Planner() {
               </button>
             ))}
             <label>
-              Clearance (mm)
+              Clearance
               <input
-                aria-label="Placement clearance"
+                aria-label="Placement clearance (mm)"
+                title="Minimum gap between parts, in mm"
                 type="number"
                 min={0}
                 max={10}
@@ -407,6 +423,40 @@ export default function Planner() {
                 }}
               />
             </label>
+            <span className="board-controls-spacer" />
+            <button className="btn small icon-only" onClick={() => step("undo")} disabled={!history.current.past.length} title="Undo (Ctrl+Z)" aria-label="Undo">
+              <Undo2 size={14} />
+            </button>
+            <button className="btn small icon-only" onClick={() => step("redo")} disabled={!history.current.future.length} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+              <Redo2 size={14} />
+            </button>
+            <span className="board-controls-sep" aria-hidden />
+            <button className="btn small icon-only" onClick={rearrange} disabled={!doc.components.some((c) => !c.placement.locked)} title="Re-arrange every unlocked part" aria-label="Re-arrange unlocked parts">
+              <Shuffle size={14} />
+            </button>
+            <button
+              className="btn small icon-only"
+              aria-label="Clear board"
+              disabled={!doc.components.length}
+              onClick={() => {
+                setDoc((d) => ({ ...d, components: [] }));
+                setActive("");
+                setError("");
+              }}
+              title="Clear board: remove every part (undo brings them back)"
+            >
+              <Trash2 size={14} />
+            </button>
+            <span className="board-controls-sep" aria-hidden />
+            <button
+              className="btn small icon-only"
+              onClick={() => setFull((f) => !f)}
+              title={full ? "Exit full screen (Esc)" : "Full screen"}
+              aria-label={full ? "Exit full screen" : "Full screen"}
+              aria-pressed={full}
+            >
+              {full ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
           </div>
           <div className="board-controls">
             {(
@@ -447,7 +497,7 @@ export default function Planner() {
             )}
             <label>
               Grid
-              <select value={snap} onChange={(e) => setSnap(+e.target.value)}>
+              <select aria-label="Snap grid" value={snap} onChange={(e) => setSnap(+e.target.value)}>
                 <option value={1}>1 mm</option>
                 <option value={0.5}>0.5 mm</option>
                 <option value={0.1}>0.1 mm</option>
@@ -467,7 +517,7 @@ export default function Planner() {
             {doc.board.mountingHolesEnabled && shape !== "circle" && (
               <>
                 <BoardSizeInput
-                  label="Hole to edge"
+                  label="To edge"
                   ariaLabel="Hole centre to board edge"
                   min={1}
                   max={50}
@@ -484,28 +534,6 @@ export default function Planner() {
                 />
               </>
             )}
-            <span className="board-controls-spacer" />
-            <button className="btn small" onClick={() => step("undo")} disabled={!history.current.past.length} title="Undo (Ctrl+Z)">
-              <Undo2 size={14} /> Undo
-            </button>
-            <button className="btn small" onClick={() => step("redo")} disabled={!history.current.future.length} title="Redo (Ctrl+Shift+Z)">
-              <Redo2 size={14} /> Redo
-            </button>
-            <button className="btn small" onClick={rearrange} disabled={!doc.components.some((c) => !c.placement.locked)}>
-              <Shuffle size={14} /> Re-arrange unlocked
-            </button>
-            <button
-              className="btn small"
-              disabled={!doc.components.length}
-              onClick={() => {
-                setDoc((d) => ({ ...d, components: [] }));
-                setActive("");
-                setError("");
-              }}
-              title="Remove every part from the board (undo brings them back)"
-            >
-              <Trash2 size={14} /> Clear board
-            </button>
           </div>
           <div>
             <div hidden={view === "3d"}>
