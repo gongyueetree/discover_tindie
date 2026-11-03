@@ -207,7 +207,9 @@ export default function Viewer({
           design
             ? design.kind === "vendor"
               ? `Reference design${design.vendor ? " · " + design.vendor : ""}`
-              : "Open-source design"
+              : design.vendor
+                ? `Open-source design · ${design.vendor}`
+                : "Open-source design"
             : "Project viewer"
         }
         title={design?.name || bundle?.project.name || "Look inside a project"}
@@ -489,7 +491,10 @@ function DesignPanel({ design, github }: { design: DesignInfo; github: GithubRef
       {design.kind === "vendor" ? (
         <span className="vendor-badge">Reference design{design.vendor ? ` · ${design.vendor}` : ""}</span>
       ) : (
-        <span className="pill">Open source</span>
+        <>
+          {design.vendor && <span className="vendor-badge">Manufacturer design · {design.vendor}</span>}
+          <span className="pill">Open source</span>
+        </>
       )}
       {design.license && (
         <span className="pill muted">{design.kind === "vendor" ? "Vendor terms apply" : `Licence: ${design.license}`}</span>

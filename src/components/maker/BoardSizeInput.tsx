@@ -4,10 +4,16 @@ export default function BoardSizeInput({
   label,
   value,
   onCommit,
+  min = 20,
+  max = 300,
+  ariaLabel,
 }: {
   label: string;
   value: number;
   onCommit: (value: number) => string | null;
+  min?: number;
+  max?: number;
+  ariaLabel?: string;
 }) {
   const [draft, setDraft] = useState(String(value)),
     [error, setError] = useState("");
@@ -17,8 +23,8 @@ export default function BoardSizeInput({
   }, [value]);
   function apply() {
     const n = Number(draft);
-    if (!draft.trim() || !Number.isFinite(n) || n < 20 || n > 300) {
-      setError("Enter 20–300 mm.");
+    if (!draft.trim() || !Number.isFinite(n) || n < min || n > max) {
+      setError(`Enter ${min}–${max} mm.`);
       return;
     }
     const issue = onCommit(n);
@@ -29,10 +35,10 @@ export default function BoardSizeInput({
     <label>
       {label}
       <input
-        aria-label={"Board " + label.toLowerCase()}
+        aria-label={ariaLabel || "Board " + label.toLowerCase()}
         type="number"
-        min={20}
-        max={300}
+        min={min}
+        max={max}
         step="any"
         value={draft}
         aria-invalid={!!error}

@@ -48,6 +48,37 @@ export function resolveName(kind: "symbol" | "footprint", raw: string | null | u
   return null;
 }
 
+/**
+ * A KiCad symbol for a part number when the database records none. KiCad names many symbols with a
+ * lowercase "x" for the variant characters (STM32F103CBTx covers STM32F103CBT6 / CBT7); match those,
+ * or an exact name, against the MPN. Up to three trailing packing characters are allowed
+ * (STM32F103CBT6TR). The most specific name wins (fewest wildcards). Reported as inferred.
+ */
+let wildcard: { lib: string; name: string; re: RegExp; literal: number }[] | null = null;
+export function symbolForMpn(mpn: string | null | undefined) {
+  const m = String(mpn || "").trim().toUpperCase();
+  if (m.length < 4 || m.length > 60) return null;
+  const exact = resolveName("symbol", m);
+  if (exact) return exact;
+  if (!wildcard) {
+    wildcard = [];
+    for (const [lib, names] of Object.entries((index as any).symbols as Record<string, string[]>))
+      for (const name of names) {
+        // Wildcards are the lowercase x after the first digit (STM32F103CBTx, not "xx" brand prefixes).
+        const head = name.match(/^[^0-9]*/)![0];
+        const tail = name.slice(head.length);
+        if (!/x/.test(tail) || !/^[A-Za-z0-9_.+-]+$/.test(name)) continue;
+        const esc = (v: string) => v.toUpperCase().replace(/[.+]/g, "\\$&");
+        const body = esc(head) + tail.split("x").map(esc).join("[A-Z0-9]");
+        wildcard.push({ lib, name, re: new RegExp("^" + body + "[A-Z0-9]{0,3}$"), literal: name.replace(/x/g, "").length });
+      }
+  }
+  const hits = wildcard.filter((w) => w.re.test(m.replace(/[^A-Z0-9.+_-]/g, "")));
+  if (!hits.length) return null;
+  hits.sort((a, b) => b.literal - a.literal);
+  return { library: hits[0].lib, name: hits[0].name };
+}
+
 const files = new Map<string, { until: number; text: Promise<string> }>();
 function fetchText(url: string) {
   const hit = files.get(url);
@@ -98,7 +129,7 @@ async function symbolLibraryText(library: string, name: string) {
 }
 
 export type CadResult = {
-  symbol: { preview: any; source?: string; reason?: string; library?: string };
+  symbol: { preview: any; source?: string; reason?: string; library?: string; inferred?: boolean };
   footprint: { preview: any; source?: string; reason?: string; library?: string };
   model?: { path: string; revision: string; url?: string } | null;
   revision: string;
@@ -115,9 +146,20 @@ export const ezplmText = async (partId: string, kind: "symbol" | "footprint") =>
   new TextDecoder().decode((await ezplmFile(partId, kind)).body);
 const bare = (v: string) => v.split(":").pop() || v;
 
-export async function cadPreview(symbolName?: string | null, footprintName?: string | null, ez?: EzplmFiles | null): Promise<CadResult> {
+export async function cadPreview(
+  symbolName?: string | null,
+  footprintName?: string | null,
+  ez?: EzplmFiles | null,
+  mpn?: string | null,
+): Promise<CadResult> {
   const out: CadResult = { symbol: { preview: null }, footprint: { preview: null }, model: null, revision: TAG };
-  const sym = resolveName("symbol", symbolName);
+  let sym = resolveName("symbol", symbolName);
+  // No symbol recorded (or not in the library): the official symbol named after this part number.
+  const inferred = !sym && !ez?.symbol ? symbolForMpn(mpn) : null;
+  if (inferred) {
+    sym = inferred;
+    symbolName = inferred.name;
+  }
   const fp = resolveName("footprint", footprintName);
   const ezDownload = (kind: string) => `/api/maker/cad/${ez!.partId}/${kind}`;
   await Promise.all([
@@ -131,6 +173,7 @@ export async function cadPreview(symbolName?: string | null, footprintName?: str
             preview: applySymbolTypography(preview, text),
             source: symbolUrl(sym.library, sym.name),
             library: `${sym.library}:${sym.name}`,
+            ...(inferred ? { inferred: true } : {}),
           };
           return;
         } catch {

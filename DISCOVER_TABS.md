@@ -217,3 +217,15 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
   它们的每日额度用完时也会明确提示。和 partdata 的访客额度无关。
 - **PCB 点器件不再移动**：右侧面板宽度固定，选中器件时画布尺寸不变。
 - **图谱线型图例**：修复图例的小图标被画布样式撑大的问题。
+
+## 10. 第五轮调整
+
+- **原理图符号按型号匹配**：数据库没有记录符号时，在 KiCad 官方库里按型号找，支持 KiCad 用小写 x 表示变体位的命名（STM32F103CBT6 → `MCU_ST_STM32F1:STM32F103CBTx`），并允许最多 3 位包装后缀（…TR）。页面注明“按型号匹配，请对照数据手册核对引脚”。不跨封装后缀借用符号（LM358DR 不会用 LM358，以免引脚号不同）。
+- **按器件族关联**：图谱用与 partdata 知识图谱相同的族规则（`familyOf`，同 `kg.family_of`）定位器件族，STM32F103CBT6 → STM32F103；不会再落到名字相近的板卡（STM32F103C8T6_BLUE_PILL）。
+- **标题图兜底**：README 图片、PCB 预览都没有时，用 GitHub 仓库的社交预览图（仓库自设的图，否则 GitHub 生成的卡片）。
+- **厂商发布的开源设计**：仓库属于厂商自己的 GitHub 组织（TexasInstruments、NordicSemiconductor、STMicroelectronics、AnalogDevicesInc、NXP、Microchip、Espressif、Raspberry Pi、Infineon、Renesas、Silicon Labs 等）时，卡片和详情标“Manufacturer design · 厂商名”。
+- **PCB Planner**（板形与定位孔几何取自 eelib `lib/protopcb/outline.ts`、`holes.ts`，见 `src/vendor/eelib/protopcb/`）：
+  - 板形：矩形 / 圆角（半径可调）/ 圆形 / L 形；器件只能放在真实板框内（圆角、圆、L 形缺口都检查）。
+  - 定位孔：开关、孔中心到板边距离、孔径（1–8 mm）可调，按 eelib 规则贴合板形（圆形板无四角孔）。
+  - 清空板上器件、重新排布未锁定器件、撤销 / 重做（按钮或 Ctrl+Z / Ctrl+Shift+Z；拖动一次算一步）。
+  - 导出 KiCad 的板框圆角与孔径和画面一致，3D 预览随之变化。

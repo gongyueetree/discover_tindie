@@ -1,8 +1,5 @@
 "use client";
-import {
-  defaultCornerHoles,
-  effectiveMountingHoles,
-} from "@/vendor/protopcb/design-core/board/mounting-holes";
+import { effectiveMountingHoles } from "@/vendor/protopcb/design-core/board/mounting-holes";
 import PlannerLibrary, { type LibraryChoice } from "./PlannerLibrary";
 import PlannerPreview from "./PlannerPreview";
 import BoardSizeInput from "./BoardSizeInput";
@@ -18,11 +15,15 @@ import {
   placeFree,
   validateLayout,
   categoryLabels,
+  fitBoard,
+  shapeOf,
 } from "@/lib/maker/planner-rules";
+import { outlinePath, type BoardShape } from "@/vendor/eelib/protopcb/outline";
+import { holeSettingsOf, cornerRadiusOf, HOLE_DIAMETER_RANGE } from "@/vendor/eelib/protopcb/holes";
 import { plannerPcb } from "@/lib/maker/planner-export";
 import { makeComponent } from "@/lib/maker/planner";
 import { useEffect, useRef, useState } from "react";
-import { Download, RotateCw, Trash2, Upload } from "lucide-react";
+import { Download, Redo2, RotateCw, Shuffle, Trash2, Undo2, Upload } from "lucide-react";
 import { ToolHeading } from "./ToolShell";
 import {
   createDocument,
@@ -60,6 +61,96 @@ export default function Planner() {
   const svg = useRef<SVGSVGElement>(null),
     drag = useRef<{ id: string; dx: number; dy: number } | null>(null),
     input = useRef<HTMLInputElement>(null);
+  /*
+   * Undo / redo, as in eelib's board editor: every finished change is one step. A drag is one step
+   * (recorded when the pointer is let go), however many moves it made.
+   */
+  const history = useRef<{ past: CircuitCanvasDocument[]; future: CircuitCanvasDocument[] }>({ past: [], future: [] });
+  const stable = useRef(doc);
+  const stepping = useRef(false);
+  const dragging = useRef(false);
+  const latest = useRef(doc);
+  latest.current = doc;
+  const [, setSteps] = useState(0);
+  const record = () => {
+    if (dragging.current || latest.current === stable.current) return;
+    history.current.past.push(stable.current);
+    if (history.current.past.length > 100) history.current.past.shift();
+    history.current.future = [];
+    stable.current = latest.current;
+    setSteps((n) => n + 1);
+  };
+  useEffect(() => {
+    if (stepping.current) {
+      stepping.current = false;
+      stable.current = doc;
+      return;
+    }
+    record();
+  }, [doc]); // eslint-disable-line react-hooks/exhaustive-deps
+  function step(kind: "undo" | "redo") {
+    const h = history.current;
+    const from = kind === "undo" ? h.past : h.future;
+    const to = kind === "undo" ? h.future : h.past;
+    const target = from.pop();
+    if (!target) return;
+    to.push(stable.current);
+    stepping.current = true;
+    syncProjectFootprints(target.importedFootprints);
+    setDoc(target);
+    setActive("");
+    setError("");
+    setSteps((n) => n + 1);
+  }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || (e.target as HTMLElement)?.closest?.("input, textarea, select")) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        step("undo");
+      } else if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault();
+        step("redo");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /** A board change: shape, size, corner radius or holes; holes are refitted (eelib's rules). */
+  function changeBoard(patch: Partial<CircuitCanvasDocument["board"]>): string | null {
+    const next = { ...doc, board: fitBoard({ ...doc.board, ...patch }) };
+    const issue = validateLayout(next, gap);
+    if (issue) {
+      setError(issue);
+      return issue;
+    }
+    setDoc(next);
+    setError("");
+    return null;
+  }
+  /** Place every unlocked part again, largest first, around the locked ones. */
+  function rearrange() {
+    commit((d) => {
+      const locked = d.components.filter((c) => c.placement.locked);
+      const free = d.components
+        .filter((c) => !c.placement.locked)
+        .sort((a, b) => b.footprint.geometry.courtyardWidthMm * b.footprint.geometry.courtyardHeightMm - a.footprint.geometry.courtyardWidthMm * a.footprint.geometry.courtyardHeightMm);
+      const placed = [...locked];
+      for (const c of free) {
+        const p = placeFree({ ...c, placement: { ...c.placement, rotation: c.placement.rotation } }, placed, d.board, gap);
+        if (!p) {
+          setError(`No legal position for ${c.reference}. Enlarge the board or remove a component.`);
+          return d;
+        }
+        placed.push(p);
+      }
+      const order = new Map(d.components.map((c, i) => [c.instanceId, i]));
+      return { ...d, components: placed.sort((a, b) => order.get(a.instanceId)! - order.get(b.instanceId)!) };
+    });
+  }
+  const shape = shapeOf(doc.board);
+  const holeSet = holeSettingsOf({ ...doc.board, shape });
   const selected = doc.components.find((c) => c.instanceId === active),
     overlaps = findOverlaps(doc.components, 0, doc.board);
   function commit(
@@ -328,34 +419,32 @@ export default function Planner() {
                 key={axis}
                 label={label}
                 value={doc.board[axis]}
-                onCommit={(value) => {
-                  const next = {
-                    ...doc,
-                    board: { ...doc.board, [axis]: value },
-                  };
-                  const issue = validateLayout(next, gap);
-                  if (issue) return issue;
-                  setDoc(next);
-                  setError("");
-                  return null;
-                }}
+                onCommit={(value) => changeBoard({ [axis]: value })}
               />
             ))}
-            <button
-              className="btn small"
-              onClick={() =>
-                commit((d) => ({
-                  ...d,
-                  board: {
-                    ...d.board,
-                    mountingHolesEnabled: !d.board.mountingHolesEnabled,
-                    mountingHoles: defaultCornerHoles(d.board),
-                  },
-                }))
-              }
-            >
-              Mounting holes {doc.board.mountingHolesEnabled ? "on" : "off"}
-            </button>
+            <label>
+              Shape
+              <select
+                aria-label="Board shape"
+                value={shape}
+                onChange={(e) => changeBoard({ shape: e.target.value as BoardShape, cornerRadiusMm: undefined })}
+              >
+                <option value="rect">Rectangle</option>
+                <option value="rounded">Rounded corners</option>
+                <option value="circle">Circle</option>
+                <option value="lshape">L-shape</option>
+              </select>
+            </label>
+            {shape === "rounded" && (
+              <BoardSizeInput
+                label="Corner radius"
+                ariaLabel="Corner radius"
+                min={0.5}
+                max={Math.floor(Math.min(doc.board.widthMm, doc.board.heightMm) / 2)}
+                value={cornerRadiusOf({ ...doc.board, shape })}
+                onCommit={(value) => changeBoard({ cornerRadiusMm: value })}
+              />
+            )}
             <label>
               Grid
               <select value={snap} onChange={(e) => setSnap(+e.target.value)}>
@@ -364,6 +453,59 @@ export default function Planner() {
                 <option value={0.1}>0.1 mm</option>
               </select>
             </label>
+          </div>
+          <div className="board-controls">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={!!doc.board.mountingHolesEnabled && shape !== "circle"}
+                disabled={shape === "circle"}
+                onChange={(e) => changeBoard({ mountingHolesEnabled: e.target.checked })}
+              />
+              Mounting holes{shape === "circle" ? " (not on a circle)" : ""}
+            </label>
+            {doc.board.mountingHolesEnabled && shape !== "circle" && (
+              <>
+                <BoardSizeInput
+                  label="Hole to edge"
+                  ariaLabel="Hole centre to board edge"
+                  min={1}
+                  max={50}
+                  value={holeSet.marginMm}
+                  onCommit={(value) => changeBoard({ holeMarginMm: value })}
+                />
+                <BoardSizeInput
+                  label="Hole Ø"
+                  ariaLabel="Mounting hole diameter"
+                  min={HOLE_DIAMETER_RANGE.min}
+                  max={HOLE_DIAMETER_RANGE.max}
+                  value={holeSet.diameterMm}
+                  onCommit={(value) => changeBoard({ holeDiameterMm: value })}
+                />
+              </>
+            )}
+            <span className="board-controls-spacer" />
+            <button className="btn small" onClick={() => step("undo")} disabled={!history.current.past.length} title="Undo (Ctrl+Z)">
+              <Undo2 size={14} /> Undo
+            </button>
+            <button className="btn small" onClick={() => step("redo")} disabled={!history.current.future.length} title="Redo (Ctrl+Shift+Z)">
+              <Redo2 size={14} /> Redo
+            </button>
+            <button className="btn small" onClick={rearrange} disabled={!doc.components.some((c) => !c.placement.locked)}>
+              <Shuffle size={14} /> Re-arrange unlocked
+            </button>
+            <button
+              className="btn small"
+              disabled={!doc.components.length}
+              onClick={() => {
+                setDoc((d) => ({ ...d, components: [] }));
+                setActive("");
+                setError("");
+              }}
+              title="Remove every part from the board (undo brings them back)"
+            >
+              <Trash2 size={14} /> Clear board
+            </button>
           </div>
           <div>
             <div hidden={view === "3d"}>
@@ -382,9 +524,13 @@ export default function Planner() {
                 }}
                 onPointerUp={() => {
                   drag.current = null;
+                  dragging.current = false;
+                  record();
                 }}
                 onPointerCancel={() => {
                   drag.current = null;
+                  dragging.current = false;
+                  record();
                 }}
               >
                 <defs>
@@ -397,19 +543,13 @@ export default function Planner() {
                     <circle cx={0} cy={0} r={0.12} fill="#6ba997" />
                   </pattern>
                 </defs>
-                <rect
-                  width={doc.board.widthMm}
-                  height={doc.board.heightMm}
-                  rx={1}
+                <path
+                  d={outlinePath({ ...doc.board, shape })}
                   fill="#174d43"
                   stroke="#b0c6b4"
                   strokeWidth={0.3}
                 />
-                <rect
-                  width={doc.board.widthMm}
-                  height={doc.board.heightMm}
-                  fill="url(#grid)"
-                />
+                <path d={outlinePath({ ...doc.board, shape })} fill="url(#grid)" />
                 {effectiveMountingHoles(doc.board).map((h, i) => (
                   <circle
                     key={i}
@@ -470,6 +610,7 @@ export default function Planner() {
                         setActive(c.instanceId);
                         if (c.placement.locked) return;
                         const pt = point(e);
+                        dragging.current = true;
                         drag.current = {
                           id: c.instanceId,
                           dx: pt.x - c.placement.xMm,

@@ -5,6 +5,63 @@ import type {
 } from "@/vendor/protopcb/design-core/document/types";
 import { holeKeepouts } from "@/vendor/protopcb/design-core/collision";
 import { padFootprintFor } from "@/vendor/protopcb/design-core/geometry/footprint-pads";
+import { boardOutline, type BoardShape, type XY } from "@/vendor/eelib/protopcb/outline";
+import { cornerHoles, cornerRadiusOf } from "@/vendor/eelib/protopcb/holes";
+
+const EDGE_MARGIN_MM = 0.5;
+/** Point in polygon (even-odd). */
+function inside([x, y]: XY, poly: XY[]) {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+/** The planner's shapes (an imported free-form polygon is drawn as its bounding rectangle). */
+export const shapeOf = (board: BoardDefinition): BoardShape => (board.shape === "polygon" ? "rect" : board.shape);
+const outlineOf = (board: BoardDefinition) =>
+  boardOutline({ widthMm: board.widthMm, heightMm: board.heightMm, shape: shapeOf(board), cornerRadiusMm: board.cornerRadiusMm });
+/**
+ * Whether a footprint's extent rectangle, grown by the edge margin, lies inside the board's real
+ * outline (rounded corners, circle, the L's cut-out), not just its bounding box. Checks the corners
+ * and points along each side, which is exact for the planner's convex outlines and the L's notch.
+ */
+export function insideBoard(r: { x: number; y: number; width: number; height: number }, board: BoardDefinition, outline = outlineOf(board)) {
+  const m = EDGE_MARGIN_MM;
+  const x0 = r.x - m, y0 = r.y - m, x1 = r.x + r.width + m, y1 = r.y + r.height + m;
+  if (x0 < 0 || y0 < 0 || x1 > board.widthMm || y1 > board.heightMm) return false;
+  if (shapeOf(board) === "rect") return true;
+  const pts: XY[] = [];
+  for (let i = 0; i <= 4; i++) {
+    const t = i / 4;
+    pts.push([x0 + (x1 - x0) * t, y0], [x0 + (x1 - x0) * t, y1], [x0, y0 + (y1 - y0) * t], [x1, y0 + (y1 - y0) * t]);
+  }
+  return pts.every((p) => inside(p, outline));
+}
+
+/**
+ * The board with its corner holes and corner radius fitted to its size and shape, as eelib's
+ * board editor fits them (vendor/eelib/protopcb/holes.ts): margin and diameter as set, clamped.
+ */
+export function fitBoard(board: BoardDefinition): BoardDefinition {
+  const sized = {
+    widthMm: board.widthMm,
+    heightMm: board.heightMm,
+    shape: shapeOf(board),
+    cornerRadiusMm: board.cornerRadiusMm,
+    holeMarginMm: board.holeMarginMm,
+    holeDiameterMm: board.holeDiameterMm,
+  };
+  const cornerRadiusMm = board.shape === "rounded" ? cornerRadiusOf(sized) : board.cornerRadiusMm;
+  return {
+    ...board,
+    cornerRadiusMm,
+    mountingHoles: board.mountingHolesEnabled
+      ? cornerHoles({ ...sized, cornerRadiusMm }).map((h) => ({ position: { x: h.xMm, y: h.yMm }, diameterMm: h.diameterMm }))
+      : [],
+  };
+}
 export function componentExtentRect(c: PlacedComponent) {
   const fp = padFootprintFor(c.footprint.name),
     g = c.footprint.geometry;
@@ -49,12 +106,7 @@ export function placementIssue(
   if (![p.xMm, p.yMm, p.rotation].every(Number.isFinite))
     return "Coordinates must be finite numbers.";
   const r = componentExtentRect(c);
-  if (
-    r.x < 0.5 ||
-    r.y < 0.5 ||
-    r.x + r.width > board.widthMm - 0.5 ||
-    r.y + r.height > board.heightMm - 0.5
-  )
+  if (!insideBoard(r, board))
     return "The whole footprint must remain inside the board edge (0.5 mm margin).";
   if (
     holeKeepouts(board).some((h) => {
@@ -89,6 +141,7 @@ export function placeFree(
     .filter((o) => o.instanceId !== c.instanceId)
     .map(componentExtentRect);
   const holes = holeKeepouts(board);
+  const outline = outlineOf(board);
   let best: PlacedComponent | null = null,
     bestScore = -Infinity,
     bestCenter = Infinity;
@@ -120,6 +173,7 @@ export function placeFree(
         board.heightMm - 0.5 - bottom,
       );
       if (score < 0) continue;
+      if (board.shape !== "rect" && !insideBoard({ x: left, y: top, width: shape.width, height: shape.height }, board, outline)) continue;
       let valid = true;
       for (const b of boxes) {
         const dx = Math.max(b.x - right, left - b.x - b.width),
@@ -169,8 +223,7 @@ export function validateLayout(d: CircuitCanvasDocument, gap = 0.5) {
     )
   )
     return "Board dimensions must be between 20 and 300 mm.";
-  if (d.board.shape !== "rect")
-    return "This planner currently supports rectangular boards.";
+  if (!["rect", "rounded", "circle", "lshape"].includes(d.board.shape)) return "Unsupported board shape.";
   for (const c of d.components) {
     const issue = placementIssue(c, d.components, d.board, gap);
     if (issue) return `${c.reference}: ${issue}`;

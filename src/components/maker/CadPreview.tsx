@@ -12,7 +12,7 @@ import { FootprintDrawing, SymbolDrawing } from "./ecad/Drawings";
 import { PinLinkProvider, PinStatus, UnitPicker, type FootprintPreview, type SymbolPreview } from "./ecad/PinLink";
 import { StepViewer } from "./ecad/StepViewer";
 
-type Side<T> = { preview?: T | null; reason?: string; source?: string; library?: string };
+type Side<T> = { preview?: T | null; reason?: string; source?: string; library?: string; inferred?: boolean };
 type Cad = {
   symbol?: Side<SymbolPreview>;
   footprint?: Side<FootprintPreview>;
@@ -88,6 +88,11 @@ export default function CadPreview({ partId, mpn }: { partId: string; mpn: strin
                   <p className="ecad-status ecad-warn">This symbol file hides its pin names; they are shown here so the pins can be checked.</p>
                 ) : null}
                 <UnitPicker symbol={symbol} />
+                {data.symbol?.inferred ? (
+                  <p className="ecad-status" title="The parts database records no symbol for this part; this official KiCad symbol is named after its part number.">
+                    Matched by part number in the official KiCad library — check the pinout against the datasheet.
+                  </p>
+                ) : null}
               </>
             ) : (
               empty(data.symbol?.reason)
