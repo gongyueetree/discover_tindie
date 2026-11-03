@@ -616,3 +616,6 @@ dialog.maker { font-size: 14px; }
 .maker .board-controls .check{display:inline-flex;align-items:center;gap:6px}
 .maker .board-controls-spacer{flex:1 1 auto}
 .maker .board-controls .btn svg{vertical-align:-2px}
+.maker .board-controls label{display:inline-flex;align-items:center;gap:8px}
+.maker .readme-link{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.maker .design-meta .pill.muted{white-space:nowrap}

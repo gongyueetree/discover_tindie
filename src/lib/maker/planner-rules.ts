@@ -6,7 +6,25 @@ import type {
 import { holeKeepouts } from "@/vendor/protopcb/design-core/collision";
 import { padFootprintFor } from "@/vendor/protopcb/design-core/geometry/footprint-pads";
 import { boardOutline, type BoardShape, type XY } from "@/vendor/eelib/protopcb/outline";
-import { cornerHoles, cornerRadiusOf } from "@/vendor/eelib/protopcb/holes";
+import { cornerHoles, cornerRadiusOf, holeSettingsOf } from "@/vendor/eelib/protopcb/holes";
+import { lshapeCut } from "@/vendor/eelib/protopcb/outline";
+
+/**
+ * An L-shaped board has five outer corners: one hole in each, the two beside the cut-out included
+ * (eelib places four and leaves the lower leg's inner corner without one). Same cut as the outline.
+ */
+function lshapeHoles(b: { widthMm: number; heightMm: number; holeMarginMm?: number; holeDiameterMm?: number }) {
+  const { marginMm: m, diameterMm } = holeSettingsOf({ ...b, shape: "lshape" });
+  const { cutW, cutH } = lshapeCut(b.widthMm, b.heightMm);
+  const W = b.widthMm, H = b.heightMm;
+  return [
+    [m, m],
+    [W - m, m],
+    [W - m, H - cutH - m],
+    [W - cutW - m, H - m],
+    [m, H - m],
+  ].map(([x, y]) => ({ position: { x, y }, diameterMm }));
+}
 
 const EDGE_MARGIN_MM = 0.5;
 /** Point in polygon (even-odd). */
@@ -57,9 +75,11 @@ export function fitBoard(board: BoardDefinition): BoardDefinition {
   return {
     ...board,
     cornerRadiusMm,
-    mountingHoles: board.mountingHolesEnabled
-      ? cornerHoles({ ...sized, cornerRadiusMm }).map((h) => ({ position: { x: h.xMm, y: h.yMm }, diameterMm: h.diameterMm }))
-      : [],
+    mountingHoles: !board.mountingHolesEnabled
+      ? []
+      : sized.shape === "lshape"
+        ? lshapeHoles(sized)
+        : cornerHoles({ ...sized, cornerRadiusMm }).map((h) => ({ position: { x: h.xMm, y: h.yMm }, diameterMm: h.diameterMm })),
   };
 }
 export function componentExtentRect(c: PlacedComponent) {

@@ -51,8 +51,11 @@ async function library(req: NextRequest) {
       if (!fp && part.ezplmLibrary?.footprint) {
         // Not in the official KiCad library: ezPLM's own library has it.
         const name = part.footprintName.split(":").pop()!;
+        const text = await ezplmText(id, "footprint").catch(() => {
+          throw Error(`The footprint ${part.footprintName} is listed in ezPLM's library, but its file could not be downloaded right now.`);
+        });
         return NextResponse.json({
-          text: await ezplmText(id, "footprint"),
+          text,
           name: `ezPLM:${name}`,
           source: "EZPLM",
           url: `/api/maker/cad/${id}/footprint`,
