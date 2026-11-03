@@ -32,6 +32,14 @@ export function asSourceError(e: unknown) {
   if (e instanceof PartdataError) return new SourceError(e.message, e.status);
   return new SourceError(e instanceof Error ? e.message : "The request could not be completed.", 502);
 }
+/** Which distributor APIs this deployment can call (yes / no only; never the keys). */
+export function suppliersConnected() {
+  return {
+    digikey: !!process.env.DIGIKEY_CLIENT_ID && !!process.env.DIGIKEY_CLIENT_SECRET && process.env.DIGIKEY_ENV === "production",
+    mouser: !!process.env.MOUSER_API_KEY,
+  };
+}
+
 export async function search(
   q: string,
   visitor: string,
@@ -60,11 +68,7 @@ export async function search(
   if (!catalogueExact || includeSuppliers)
     await Promise.all([
       (async () => {
-        if (
-          !process.env.DIGIKEY_CLIENT_ID ||
-          !process.env.DIGIKEY_CLIENT_SECRET ||
-          process.env.DIGIKEY_ENV !== "production"
-        ) {
+        if (!suppliersConnected().digikey) {
           statuses.push({ source: "DigiKey direct", status: "unconfigured" });
           return;
         }
@@ -106,13 +110,13 @@ export async function search(
         }
       })(),
       (async () => {
-        if (!process.env.MOUSER_API_KEY) {
+        if (!suppliersConnected().mouser) {
           statuses.push({ source: "Mouser direct", status: "unconfigured" });
           return;
         }
         try {
           const r = await fetch(
-            `https://api.mouser.com/api/v1/search/keyword?apiKey=${encodeURIComponent(process.env.MOUSER_API_KEY)}`,
+            `https://api.mouser.com/api/v1/search/keyword?apiKey=${encodeURIComponent(process.env.MOUSER_API_KEY || "")}`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },

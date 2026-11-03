@@ -1,5 +1,6 @@
 import { HomeBody } from "@/components/HomeBody";
 import { SEED_LOGOS, SEED_RESOURCES } from "@/lib/seed-data";
+import { canSeeTools } from "@/lib/maker/visibility-server";
 
 function hasDatabaseConfig() {
   return Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
@@ -54,6 +55,7 @@ export async function DiscoverContent() {
         recommendation={recommendation}
         blogPosts={blogPosts}
         chrome={false}
+        designViewer={await canSeeTools()}
       />
     </div>
   );

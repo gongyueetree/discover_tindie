@@ -7,7 +7,7 @@ const Viewer = dynamic(() => import("./Viewer"), {
   ssr: false,
   loading: () => <p>Opening project viewer…</p>,
 });
-export type ProjectRequest = { search: string; files?: File[]; mode?: string };
+export type ProjectRequest = { search: string; files?: File[]; mode?: string; /** A GitHub project to open straight away. */ github?: string };
 export default function ProjectViewerModal({
   request,
   onClose,
@@ -48,6 +48,7 @@ export default function ProjectViewerModal({
         initialSearch={request.search}
         initialFiles={request.files}
         focusGithub={request.mode === "github"}
+        githubUrl={request.github}
       />
     </dialog>,
     document.body,

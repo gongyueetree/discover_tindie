@@ -210,6 +210,15 @@ export default function Bom({
     }
   }
   const [priceNote, setPriceNote] = useState("");
+  // Which distributor APIs this site has; with neither, refreshing prices cannot find anything.
+  const [suppliers, setSuppliers] = useState<{ digikey: boolean; mouser: boolean } | null>(null);
+  useEffect(() => {
+    fetch("/api/maker/suppliers")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setSuppliers({ digikey: !!d.digikey, mouser: !!d.mouser }))
+      .catch(() => undefined);
+  }, []);
+  const noSuppliers = suppliers !== null && !suppliers.digikey && !suppliers.mouser;
   async function pricing() {
     setBusy(true);
     setError("");
@@ -548,7 +557,14 @@ export default function Bom({
             </button>
             <button
               className="btn"
-              disabled={busy || !rows.some((r) => r.selected)}
+              disabled={busy || noSuppliers || !rows.some((r) => r.selected)}
+              title={
+                noSuppliers
+                  ? "DigiKey and Mouser are not connected on this site, so there are no live prices to fetch."
+                  : !rows.some((r) => r.selected)
+                    ? "Match components first; prices are looked up for matched lines."
+                    : undefined
+              }
               onClick={() => void pricing()}
             >
               {priceNote.startsWith("Checking") ? priceNote.replace("Checking supplier prices… ", "Checking prices ") : "Refresh supplier prices"}
@@ -604,7 +620,13 @@ export default function Bom({
             </label>
             <span className="badge">{rows.length} BOM lines</span>
           </div>
-          {priceNote && !priceNote.startsWith("Checking") && (
+          {noSuppliers && (
+            <p role="status" className="notice price-note">
+              Live supplier prices are not available on this site yet: DigiKey and Mouser are not connected. You can type a unit
+              price for any line.
+            </p>
+          )}
+          {!noSuppliers && priceNote && !priceNote.startsWith("Checking") && (
             <p role="status" className="notice price-note">{priceNote}</p>
           )}
           <div className="estimate-box">

@@ -58,10 +58,12 @@ export default function Viewer({
   initialSearch,
   initialFiles,
   focusGithub = false,
+  githubUrl,
 }: {
   initialSearch?: string;
   initialFiles?: File[];
   focusGithub?: boolean;
+  githubUrl?: string;
 } = {}) {
   const [bundle, setBundle] = useState<CanonicalIrBundle | null>(null),
     [assets, setAssets] = useState<InputAsset[]>([]),
@@ -261,7 +263,12 @@ export default function Viewer({
         />
       )}
       {!bundle && !design && (
-        <GithubImport autoFocus={focusGithub} onImport={async (files) => void (await open(files, "github"))} disabled={busy} />
+        <GithubImport
+          autoFocus={focusGithub && !githubUrl}
+          initialUrl={githubUrl}
+          onImport={async (files) => void (await open(files, "github"))}
+          disabled={busy}
+        />
       )}
       {error && (
         <div role="alert" className="notice error">

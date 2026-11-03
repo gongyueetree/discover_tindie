@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import SupportedFormats from "./SupportedFormats";
 import { Github, ArrowRight, FolderOpen } from "lucide-react";
 import type { GithubProject } from "@/lib/maker/github-projects";
@@ -7,12 +7,15 @@ export default function GithubImport({
   onImport,
   disabled,
   autoFocus = false,
+  initialUrl,
 }: {
   onImport: (files: File[]) => Promise<void>;
   disabled: boolean;
   autoFocus?: boolean;
+  /** Scan this repository on open and load its recommended project (used by "View design files"). */
+  initialUrl?: string;
 }) {
-  const [url, setUrl] = useState(""),
+  const [url, setUrl] = useState(initialUrl || ""),
     [scan, setScan] = useState<{
       token: string;
       repo: string;
@@ -25,7 +28,7 @@ export default function GithubImport({
     [choice, setChoice] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  async function inspect() {
+  async function inspect(target = url) {
     setBusy(true);
     setError("");
     setScan(null);
@@ -33,24 +36,36 @@ export default function GithubImport({
       const r = await fetch("/api/maker/github/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: target }),
       });
       const d = await r.json();
       if (!r.ok) throw Error(d.error);
-      setScan(d);
-      setChoice(
+      const pick =
         d.projects.find((p: GithubProject) => p.recommended)?.id ||
-          d.projects[0]?.id ||
-          "",
-      );
+        d.projects[0]?.id ||
+        "";
+      setScan(d);
+      setChoice(pick);
+      return { scan: d, pick };
     } catch (e) {
       setError(String(e));
+      return null;
     } finally {
       setBusy(false);
     }
   }
-  async function load() {
-    if (!scan) return;
+  // Opened for a known repository: scan it and load the recommended project without extra clicks.
+  const started = useRef(false);
+  useEffect(() => {
+    if (!initialUrl || started.current) return;
+    started.current = true;
+    void inspect(initialUrl).then((found) => found?.pick && load(found.scan, found.pick));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialUrl]);
+  async function load(s = scan, chosen = choice) {
+    if (!s) return;
+    const scan = s,
+      choice = chosen;
     setBusy(true);
     setError("");
     try {
