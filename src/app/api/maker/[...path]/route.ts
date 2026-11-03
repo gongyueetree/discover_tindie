@@ -1,7 +1,7 @@
 import { translateTexts, englishParts } from "@/lib/maker/translation";
 import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
-import { search, SourceError, rateLimit, asSourceError } from "@/lib/maker/server";
+import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
 import { matchRow } from "@/lib/maker/bom";
 import { visitorHash, pdGetRaw, oneVisitorCharge } from "@/lib/partdata/client";
 import { cadPreview, ezplmFile } from "@/lib/partdata/kicad-lib";
@@ -198,6 +198,15 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "circuits" && path.length === 2 && DESIGN_ID.test(a)) {
       const design = await designDetail(a, visitor);
       result = { design, github: design.kind === "open_source" ? githubSource(design.sourceUrl) : null };
+    } else if (req.method === "GET" && head === "discoveries" && path.length === 3 && /^\d{1,9}$/.test(a) && path[2] === "design") {
+      // "View design files" on a Today's discovery: its GitHub project, when the viewer can open it.
+      // Looked up by the published discovery's id (never an arbitrary URL from the browser).
+      const hasDb = Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
+      const d = hasDb ? await (await import("@/lib/queries")).getDiscovery(Number(a)).catch(() => null) : null;
+      if (!d || d.status !== "published") throw new SourceError("Not found", 404);
+      result = { github: await (await import("@/lib/maker/discovery-repo")).discoveryRepo(d.id, d.sourceUrl) };
+    } else if (req.method === "GET" && head === "suppliers" && path.length === 1) {
+      result = suppliersConnected();
     } else if (req.method === "GET" && head === "modules" && path.length === 1) {
       result = { items: await moduleTree() };
     } else if (req.method === "GET" && head === "planner-parts" && path.length === 1) {
@@ -238,7 +247,12 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else throw new SourceError("Not found", 404);
 
     const res = NextResponse.json(result);
-    res.headers.set("Cache-Control", "no-store");
+    if (req.method === "GET" && SHARED.test(path.join("/")) && !q.get("mpn") && !q.get("part") && !q.get("q")) {
+      // Browsing lists are the same for every visitor: Vercel's CDN keeps them, so repeat views skip
+      // this function and the parts database. Middleware (the preview gate) still runs first.
+      res.headers.set("Cache-Control", "public, max-age=60");
+      res.headers.set("Vercel-CDN-Cache-Control", "max-age=300, stale-while-revalidate=86400");
+    } else res.headers.set("Cache-Control", "no-store");
     return res;
   } catch (e) {
     const err = asSourceError(e);
@@ -323,8 +337,15 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
   return out;
 }
 
+/**
+ * Public browsing data that does not depend on who asks: the circuit-module tree, design lists by
+ * module or family, one design, one part, and knowledge-graph rankings. Searches (parts?q=, designs
+ * by part number) are not shared: each counts as the visitor's own query.
+ */
+const SHARED = /^(modules|suppliers|circuits|circuits\/d_[a-z2-7]+|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
+
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
-const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^modules$|^translate$/;
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^modules$|^suppliers$|^translate$/;
 const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
   oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
 export const GET = charged;

@@ -199,15 +199,22 @@ async function designPool(filter: DesignFilter, visitor: string) {
   else if (filter.family) q.family = filter.family.replace(/^fam:/, "");
   else if (filter.function) q.function = filter.function;
   else throw new PartdataError("Choose a part, family or circuit module.", 400, "bad_request");
-  const out: DesignCard[] = [];
-  let upstreamTotal = 0;
-  for (let offset = 0; offset <= 80; offset += 20) {
-    const r = await pdGet(`${P}/designs`, { ...q, offset }, visitor);
-    const items: DesignCard[] = (r.data.items || []).map(toDesign);
-    upstreamTotal = Number(r.meta?.pagination?.total) || 0;
-    out.push(...items);
-    if (items.length < 20 || offset + 20 >= upstreamTotal) break;
-  }
+  // partdata pages 20 at a time (up to offset 80). The first page says how many there are; the
+  // rest are fetched together rather than one after another.
+  const first = await pdGet(`${P}/designs`, { ...q, offset: 0 }, visitor);
+  const firstItems: DesignCard[] = (first.data.items || []).map(toDesign);
+  const upstreamTotal = Number(first.meta?.pagination?.total) || 0;
+  const offsets: number[] = [];
+  if (firstItems.length >= 20) for (let o = 20; o <= 80 && o < upstreamTotal; o += 20) offsets.push(o);
+  const rest = await Promise.all(
+    offsets.map((offset) =>
+      pdGet(`${P}/designs`, { ...q, offset }, visitor)
+        .then((r) => (r.data.items || []).map(toDesign) as DesignCard[])
+        // A later page that fails leaves a shorter list rather than no list.
+        .catch(() => [] as DesignCard[]),
+    ),
+  );
+  const out: DesignCard[] = [...firstItems, ...rest.flat()];
   const seen = new Set<string>();
   return out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id));
 }

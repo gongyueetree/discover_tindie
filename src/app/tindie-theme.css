@@ -644,3 +644,9 @@ dialog.maker { font-size: 14px; }
 .maker .board-controls input[type="checkbox"] { width: auto; margin: 0; padding: 0; }
 .maker .board-controls-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 0; }
 .maker .board-canvas g[role="button"]:focus:not(:focus-visible) { outline: none; }
+.maker .bom-table td small { display: block; }
+/* "View design files" on Today's discoveries (opens the Open hardware viewer) */
+.disc-design-btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 600; color: #fff; background: #22b8c4; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; margin-left: auto; }
+.disc-design-btn:hover { background: #1aa0ab; }
+.disc-design-btn:focus-visible { outline: 2px solid #1c6e7e; outline-offset: 2px; }
+.disc-design-btn[data-large] { font-size: 13.5px; padding: 9px 16px; border-radius: 8px; margin-left: 0; }

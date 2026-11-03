@@ -5,6 +5,63 @@ import { RELATED_PRODUCTS } from "@/lib/taxonomy";
 import { useHomeSearch, matchText } from "@/components/HomeSearch";
 import { safeLinkHref } from "@/lib/safe-url";
 import { trackItem } from "@/lib/track-client";
+import dynamic from "next/dynamic";
+import { useRef } from "react";
+const ProjectViewerModal = dynamic(() => import("@/components/maker/ProjectViewerModal"), { ssr: false });
+
+/**
+ * The GitHub project behind a discovery when the Open hardware viewer can open it (looked up once the
+ * card is on screen; null while unknown or when there is none).
+ */
+const repoCache = new Map<number, Promise<string | null>>();
+function useDesignRepo(id: number, enabled: boolean) {
+  const [repo, setRepo] = useState<string | null>(null);
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!enabled || !host.current) return;
+    let alive = true;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      let p = repoCache.get(id);
+      if (!p) {
+        p = fetch(`/api/maker/discoveries/${id}/design`)
+          .then((r) => (r.ok ? r.json() : { github: null }))
+          .then((d) => (typeof d.github === "string" ? d.github : null))
+          .catch(() => null);
+        repoCache.set(id, p);
+      }
+      void p.then((v) => alive && setRepo(v));
+    }, { rootMargin: "300px 0px" });
+    io.observe(host.current);
+    return () => {
+      alive = false;
+      io.disconnect();
+    };
+  }, [id, enabled]);
+  return { repo, host };
+}
+
+function ViewDesignButton({ repo, onOpen, large = false }: { repo: string; onOpen: (repo: string) => void; large?: boolean }) {
+  return (
+    <button
+      type="button"
+      className="disc-design-btn"
+      data-large={large || undefined}
+      title={"Open the design files from " + repo.replace("https://github.com/", "") + " in the online viewer"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(repo);
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M11 9h4a2 2 0 0 0 2-2V3" /><circle cx="9" cy="9" r="2" /><path d="M7 21v-4a2 2 0 0 1 2-2h4" /><circle cx="15" cy="15" r="2" />
+      </svg>
+      View design files
+    </button>
+  );
+}
 
 export type Discovery = {
   id: number; title: string; summary: string; why: string; category: string;
@@ -14,9 +71,10 @@ export type Discovery = {
   isPick: boolean | null; saveCount: number | null; commentCount: number | null;
 };
 
-export function DiscoveryGrid({ items }: { items: Discovery[] }) {
+export function DiscoveryGrid({ items, designViewer = false }: { items: Discovery[]; designViewer?: boolean }) {
   const { q } = useHomeSearch();
   const [detail, setDetail] = useState<Discovery | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
 
   let shown = items;
   if (q.trim()) {
@@ -28,18 +86,20 @@ export function DiscoveryGrid({ items }: { items: Discovery[] }) {
   return (
     <>
       <div className="disc-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 16 }}>
-        {shown.map((d) => <DiscoveryCard key={d.id} d={d} onOpen={() => { setDetail(d); trackItem("discovery", d.id); }} />)}
+        {shown.map((d) => <DiscoveryCard key={d.id} d={d} designViewer={designViewer} onDesign={setViewing} onOpen={() => { setDetail(d); trackItem("discovery", d.id); }} />)}
         {shown.length === 0 && <div style={{ gridColumn: "1/-1", color: "#8a9499", padding: 30, textAlign: "center", border: "1px dashed #ececec", borderRadius: 10 }}>No discoveries match your search.</div>}
       </div>
-      {detail && <DetailDrawer d={detail} onClose={() => setDetail(null)} />}
+      {detail && <DetailDrawer d={detail} onClose={() => setDetail(null)} designViewer={designViewer} onDesign={(r) => { setDetail(null); setViewing(r); }} />}
+      {viewing && <ProjectViewerModal request={{ search: "", mode: "github", github: viewing }} onClose={() => setViewing(null)} />}
     </>
   );
 }
 
-function DiscoveryCard({ d, onOpen }: { d: Discovery; onOpen: () => void }) {
+function DiscoveryCard({ d, onOpen, designViewer, onDesign }: { d: Discovery; onOpen: () => void; designViewer: boolean; onDesign: (repo: string) => void }) {
   const tags = (d.chips || []).slice(0, 4);
+  const { repo, host } = useDesignRepo(d.id, designViewer);
   return (
-    <div onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }} style={{ background: "#fff", border: "1px solid #ececec", borderRadius: 10, display: "flex", flexDirection: "column", cursor: "pointer" }}>
+    <div ref={host} onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }} style={{ background: "#fff", border: "1px solid #ececec", borderRadius: 10, display: "flex", flexDirection: "column", cursor: "pointer" }}>
       <div style={{ padding: "15px 16px", display: "flex", flexDirection: "column", flex: 1 }}>
         {(d.isSponsored || d.isPick) && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
@@ -51,9 +111,10 @@ function DiscoveryCard({ d, onOpen }: { d: Discovery; onOpen: () => void }) {
         <div style={{ fontSize: 11.5, color: "#8a9499", marginBottom: 9 }}><b style={{ color: "#5a6b72" }}>{d.sourceName}</b></div>
         <div style={{ fontSize: 13, color: "#6b7479", flex: 1, lineHeight: 1.5 }}>{flatten(d.summary)}</div>
         <div style={{ fontSize: 12, color: "#1c6e7e", background: "#eef7f8", borderRadius: 7, padding: "8px 10px", marginTop: 11 }}><b>Insights:</b> {flatten(d.why)}</div>
-        {tags.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 11 }}>
+        {(tags.length > 0 || repo) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 11 }}>
             {tags.map((t) => <span key={t} style={{ fontSize: 11, background: "#f0f5f6", color: "#1c6e7e", padding: "3px 9px", borderRadius: 5 }}>{t}</span>)}
+            {repo && <ViewDesignButton repo={repo} onOpen={onDesign} />}
           </div>
         )}
       </div>
@@ -61,7 +122,8 @@ function DiscoveryCard({ d, onOpen }: { d: Discovery; onOpen: () => void }) {
   );
 }
 
-function DetailDrawer({ d, onClose }: { d: Discovery; onClose: () => void }) {
+function DetailDrawer({ d, onClose, designViewer = false, onDesign }: { d: Discovery; onClose: () => void; designViewer?: boolean; onDesign?: (repo: string) => void }) {
+  const { repo, host } = useDesignRepo(d.id, designViewer);
   // While the detail drawer is open, hide the fixed bottom tab bar so it
   // doesn't cover the drawer's content. BottomTabBar listens for this event.
   useEffect(() => {
@@ -110,6 +172,7 @@ function DetailDrawer({ d, onClose }: { d: Discovery; onClose: () => void }) {
           {imageUrl && (
             <img src={imageUrl} alt={d.title} style={{ width: "100%", borderRadius: 10, marginBottom: 18, display: "block", objectFit: "cover", maxHeight: 280 }} />
           )}
+          <div ref={host}>{repo && onDesign && <div style={{ marginBottom: 16 }}><ViewDesignButton repo={repo} onOpen={onDesign} large /></div>}</div>
           <Block h="What it is"><Bullets text={d.summary} /></Block>
           <div style={{ background: "#eef7f8", borderRadius: 9, padding: "13px 15px", marginBottom: 18 }}><h3 style={h3()}>Insights</h3><Bullets text={d.why} fontSize={14} /></div>
           {safeLinkHref(d.sourceUrl) && (

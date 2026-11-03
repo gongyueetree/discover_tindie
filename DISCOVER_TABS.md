@@ -248,3 +248,15 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - **参考设计预览**：列表里带的图片加载失败时，卡片会再向服务器要 README 图片 / PCB 预览，最后用 GitHub 仓库的社交卡片；GitHub 查询失败（限额、故障）不再被当作「没有图片」缓存一天，只缓存 10 分钟。
 - **知识图谱**：点击任一节点，右侧在标题下显示该器件的简介（零件库里的描述；本型号没有时用同族型号的描述并注明）。
 - **「The parts database is unavailable right now」误报**：MPN variants 只看零件库本身的状态，DigiKey / Mouser 未配置不再被当作零件库不可用。
+
+## 13. 加载速度与第七轮
+
+**为什么慢（参考设计列表）**：一个电路模块的设计列表，Tindie 服务端要向 partdata 取最多 5 页（partdata 每页最多 20 条），原来是一页一页串行；而 partdata 每取一页都把整个结果（最多 2000 个设计）重算一遍再切出 20 条。另外 partdata 只跑一个 uvicorn 进程，Partner API 的处理函数是 `async def` 却做同步数据库查询，所有请求（列表、搜索、每张卡片的封面 / PCB 预览）排队一个个处理。
+
+- Tindie：第一页之后其余几页并行取（`designPool`）。
+- Tindie：与访客无关的浏览数据（模块树、按模块/族的设计列表、单个设计、单个零件、知识图谱排行、供应商连接状态、发现条目的工程链接）让 Vercel CDN 缓存 5 分钟（过期后一天内先给旧的再后台刷新）；按型号/关键字的搜索不缓存，仍按访客计次。预览开关的中间件在 CDN 之前执行，不受影响。
+- partdata（ezplm_partdata `perf/partner-api`）：Partner API 处理函数改为普通 `def`（FastAPI 放进线程池并发执行）；`/designs` 同一筛选条件的计算结果缓存 5 分钟，后续翻页直接切片；Postgres 上为型号前缀搜索在后台建 `varchar_pattern_ops` 索引（`CONCURRENTLY`，不锁表）。
+
+**刷新供应商价格**：本站没配 DigiKey / Mouser 时，按钮置灰并直接说明「DigiKey 和 Mouser 未接入，可手动填单价」，不再点了像没反应。接入需要 Vercel 环境变量 `DIGIKEY_CLIENT_ID`、`DIGIKEY_CLIENT_SECRET`、`DIGIKEY_ENV=production` 和/或 `MOUSER_API_KEY`。表格里「Unpriced」和「No live price found.」分两行显示。
+
+**Today's Hardware Discoveries → View design files**：卡片出现在屏幕上时，服务端按发现条目 id 查它的来源：本身是 GitHub 仓库就用它，否则读文章页面里链接的 GitHub 仓库（按出现顺序最多查 3 个），只有仓库里有查看器能打开的工程文件（非 LFS 占位）才在卡片和详情抽屉里显示「View design files」。点击直接弹出 Open hardware 的在线查看器，自动扫描该仓库并打开推荐的工程。结果按条目缓存一天。只对能看到新 Tab 的访客显示。目前只支持 GitHub（查看器的导入只支持 GitHub）。
