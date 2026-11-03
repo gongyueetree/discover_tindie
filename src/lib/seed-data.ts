@@ -95,3 +95,47 @@ export const SEED_DISCOVERIES = [
   d({ title:"ESP32 weather station (reposted x12 sites)", category:"crowdfunding", sourceName:"GitHub", icon:"🌦️", summary:"A common ESP32 weather build reposted across many aggregators this week.", why:"Flagged: duplicate cluster; not novel enough for a daily slot.", chips:["ESP32","Weather"], aiScore:52, flag:"dup", status:"needs_review", relatedTags:["esp32"] }),
 ];
 
+
+/**
+ * Logos for the seed resources, from the icons already saved in public/logos (scripts/localize-logos.ts).
+ * Used when the page runs without the Discover database (local / preview); with the database each
+ * resource's own logo field is used.
+ */
+export const SEED_LOGOS: Record<string, string> = {
+  "hackaday-io": "/logos/hackaday-io.png",
+  "github": "/logos/github.png",
+  "oshwa": "/logos/oshwa.png",
+  "arduino-hub": "/logos/arduino-hub.png",
+  "instructables": "/logos/instructables.png",
+  "hackster": "/logos/hackster.png",
+  "adafruit-learn": "/logos/adafruit-learn.png",
+  "sparkfun-learn": "/logos/sparkfun-learn.png",
+  "thingiverse": "/logos/thingiverse.png",
+  "tindie": "/logos/tindie.png",
+  "eehub": "/logos/eehub-io-mqkann26.png",
+  "groupgets": "/logos/groupgets.png",
+  "etsy-e": "/logos/etsy-e.png",
+  "kicad": "/logos/kicad.png",
+  "altium": "/logos/altium.png",
+  "easyeda": "/logos/easyeda.png",
+  "fusion-e": "/logos/fusion-e.png",
+  "flux": "/logos/flux.png",
+  "ltspice": "/logos/ltspice.png",
+  "platformio": "/logos/platformio.png",
+  "zephyr": "/logos/zephyr.png",
+  "freecad": "/logos/freecad.png",
+  "seeed-fusion": "/logos/seeed-fusion.png",
+  "jlcpcb": "/logos/jlcpcb.png",
+  "pcbway": "/logos/pcbway.png",
+  "oshpark": "/logos/oshpark.png",
+  "circuithub": "/logos/circuithub.png",
+  "aisler": "/logos/aisler.png",
+  "crowdsupply": "/logos/crowdsupply.png",
+  "kickstarter": "/logos/kickstarter.png",
+  "backerkit": "/logos/backerkit.png",
+  "digikey": "/logos/digikey.png",
+  "mouser": "/logos/mouser.png",
+  "octopart": "/logos/octopart.png",
+  "snapmagic": "/logos/snapmagic.png",
+  "ultralib": "/logos/ultralib.png",
+};

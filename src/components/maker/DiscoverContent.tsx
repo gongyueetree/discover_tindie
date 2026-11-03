@@ -1,5 +1,5 @@
 import { HomeBody } from "@/components/HomeBody";
-import { SEED_RESOURCES } from "@/lib/seed-data";
+import { SEED_LOGOS, SEED_RESOURCES } from "@/lib/seed-data";
 
 function hasDatabaseConfig() {
   return Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
@@ -11,7 +11,7 @@ function hasDatabaseConfig() {
  * preview) the repository's resource directory is shown and nothing else is invented.
  */
 export async function DiscoverContent() {
-  let resources: any[] = SEED_RESOURCES.map((r, i) => ({ ...r, id: i + 1, status: "active" })),
+  let resources: any[] = SEED_RESOURCES.map((r, i) => ({ ...r, logo: SEED_LOGOS[r.slug] ?? null, id: i + 1, status: "active" })),
     discoveries: any[] = [],
     blogPosts: any[] = [],
     recommendation: any = null,
