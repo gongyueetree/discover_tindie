@@ -238,3 +238,13 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - **全部上线**：在 Vercel 加环境变量 `MAKER_TOOLS_PUBLIC=1` 并 Redeploy；想收回就删掉它再 Redeploy。
 - `MAKER_PREVIEW_KEY` 至少 16 个字符，可用 `openssl rand -hex 16` 生成。
 - 在 tindie.com 的 iframe 里，浏览器可能拦截第三方 Cookie，预览时请直接打开站点域名测试。
+
+## 12. 第六轮调整
+
+- **PCB planner 版面**：右栏收窄到 230px；控制条压成三行——视图 / 间距 / 撤销·重做 / 重新排布·清空（图标按钮，悬停有说明）/ 全屏；尺寸·形状·网格；安装孔。左栏去掉 KiCad 许可说明。
+- **全屏画布**：画布右上角的全屏按钮把画布和控制条铺满窗口，再点或按 Esc 收回。用页面内铺满而不是浏览器 Fullscreen API，嵌在 tindie.com 的 iframe 里也能用。
+- **离开确认**：板上有零件且未保存时，点站内链接（含四个 Tab）弹出「留下 / 不保存离开 / 保存并离开」，保存即下载 layout.json；关闭或刷新页面时由浏览器弹出它自己的确认框（浏览器不允许自定义）。`src/components/maker/LeaveGuard.tsx`。
+- **搜索状态**：搜索进行中显示「Searching…」和占位卡片，只有确实没有结果时才显示「No matches」。
+- **参考设计预览**：列表里带的图片加载失败时，卡片会再向服务器要 README 图片 / PCB 预览，最后用 GitHub 仓库的社交卡片；GitHub 查询失败（限额、故障）不再被当作「没有图片」缓存一天，只缓存 10 分钟。
+- **知识图谱**：点击任一节点，右侧在标题下显示该器件的简介（零件库里的描述；本型号没有时用同族型号的描述并注明）。
+- **「The parts database is unavailable right now」误报**：MPN variants 只看零件库本身的状态，DigiKey / Mouser 未配置不再被当作零件库不可用。

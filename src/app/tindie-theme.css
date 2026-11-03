@@ -500,7 +500,7 @@ dialog.maker { font-size: 14px; }
 .maker .planner-part-desc { font-size: 12px; color: var(--muted-2); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .maker .planner-part-tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
 .maker .planner-part-tags .pill { font-size: 10.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.maker .planner-grid { grid-template-columns: 290px minmax(0, 1fr) 300px; }
+.maker .planner-grid { grid-template-columns: 260px minmax(0, 1fr) 230px; }
 .maker .planner-library-results { max-height: 460px; }
 @media (max-width: 1150px) { .maker .planner-grid { grid-template-columns: 260px minmax(0, 1fr); } }
 @media (max-width: 700px) { .maker .planner-grid { grid-template-columns: 1fr; } }
@@ -619,3 +619,28 @@ dialog.maker { font-size: 14px; }
 .maker .board-controls label{display:inline-flex;align-items:center;gap:8px}
 .maker .readme-link{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .maker .design-meta .pill.muted{white-space:nowrap}
+
+/* ---------------------------------------------------------------- planner: compact controls, full screen, leave dialog */
+.maker .board-controls { padding: 10px 14px; gap: 10px; }
+.maker .board-controls .btn.icon-only { padding: 6px 8px; }
+.maker .planner-inspector label { gap: 8px; }
+.maker .planner-inspector input[type="number"], .maker .planner-inspector select { width: 92px; }
+.maker .board-canvas-wrap.board-full { position: fixed; top: 0; left: 0; right: 0; bottom: 0; height: 100vh; height: 100dvh; margin: 0; z-index: 1000; border-radius: 0; border: 0; background: var(--bg, #fff); display: flex; flex-direction: column; overflow: auto; }
+.maker .board-canvas-wrap.board-full > div:not(.board-controls) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.maker .board-canvas-wrap.board-full > div:not(.board-controls) > div { flex: 1 1 auto; min-height: 0; position: relative; }
+.maker .board-canvas-wrap.board-full .board-canvas { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
+.maker .leave-dialog { border: 1px solid var(--line); border-radius: 12px; padding: 24px; max-width: 460px; width: 92vw; }
+.maker .leave-dialog::backdrop { background: rgba(21, 56, 59, 0.55); }
+.maker .leave-dialog h3 { margin: 0 0 8px; }
+.maker .leave-dialog p { color: var(--muted); margin: 0 0 18px; line-height: 1.5; }
+.maker .leave-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.maker .part-card-skeletons { display: grid; gap: 10px; }
+.maker .part-card-skeletons span { display: block; height: 84px; border-radius: 10px; background: linear-gradient(90deg, #f1f5f6 25%, #e6eef0 50%, #f1f5f6 75%); background-size: 200% 100%; animation: part-skeleton 1.2s ease-in-out infinite; }
+@keyframes part-skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .maker .part-card-skeletons span { animation: none; } }
+.maker .graph-node-desc { margin: 10px 0 4px; font-size: 14px; line-height: 1.5; color: var(--text, #333); }
+.maker .graph-node-desc.muted { color: var(--muted); font-size: 13px; }
+.maker .graph-node-desc small { color: var(--muted); }
+.maker .board-controls input[type="checkbox"] { width: auto; margin: 0; padding: 0; }
+.maker .board-controls-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 0; }
+.maker .board-canvas g[role="button"]:focus:not(:focus-visible) { outline: none; }

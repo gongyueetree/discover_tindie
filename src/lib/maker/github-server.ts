@@ -459,6 +459,8 @@ export function githubReadme(repo: string, commit: string | null, subdir = ""): 
   const hit = readmes.get(key);
   if (hit && hit.until > Date.now()) return hit.value;
   if (readmes.size > 1000) readmes.clear();
+  // A lookup GitHub refused (quota, outage) is not "no README": keep it only briefly.
+  let failed = false;
   const value = (async (): Promise<ReadmeInfo> => {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || (commit && !/^[\w.-]{1,100}$/.test(commit))) return { intro: null, image: null, readmeUrl: null };
     const ref = commit ? `?ref=${commit}` : "";
@@ -471,13 +473,17 @@ export function githubReadme(repo: string, commit: string | null, subdir = ""): 
         const md = Buffer.from(d.content, "base64").toString("utf8");
         const base = typeof d.download_url === "string" ? d.download_url : `https://raw.githubusercontent.com/${repo}/${commit || "HEAD"}/${d.path || "README.md"}`;
         return { intro: readmeIntro(md), image: readmeImage(md, base), readmeUrl: typeof d.html_url === "string" ? d.html_url : null };
-      } catch {
+      } catch (e) {
+        if (!(e instanceof SourceError && e.status === 404)) failed = true;
         continue;
       }
     }
     return { intro: null, image: null, readmeUrl: null };
   })();
   readmes.set(key, { until: Date.now() + 86_400_000, value });
+  value.then(() => {
+    if (failed) readmes.set(key, { until: Date.now() + 10 * 60_000, value });
+  });
   return value;
 }
 
