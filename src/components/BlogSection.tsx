@@ -16,7 +16,9 @@ function fmtDate(d?: string | Date | null): string {
   if (!d) return "";
   const dt = new Date(d);
   if (isNaN(dt.getTime())) return "";
-  return dt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  // Fixed time zone: rendered on the server (UTC) and again in the browser, so a local time zone
+  // would print a different day near midnight and break hydration (React errors #425 / #418 / #423).
+  return dt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 export function BlogSection({ posts = [] }: { posts?: BlogPost[] }) {
