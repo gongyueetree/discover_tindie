@@ -272,3 +272,8 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 - **EasyEDA（标准版）原理图**：eelib 没有 EasyEDA 绘图器，之前只能画出方框。新增 `src/lib/maker/easyeda-schematic.ts`，直接按 EasyEDA JSON 的图元（元件图形、引脚名/号、导线、结点、网络标识/端口、分区框、文字、图框）输出与 KiCad/EAGLE 相同的绘图数据；多页工程导出（docType 5）每页一张。
 - **BOM 没有型号**：EasyEDA 元件属性是 key`value`key`value 交替写法，解析器只认 key=value，导致 Manufacturer / Manufacturer Part 全丢。已修正（`canon/lib/eda/easyeda.ts`），BOM 能显示 MPN。
 - **打开设计时选错文件夹**：同一目录下有多个工程（如 hardware/pcb 下的 distro-v2 和 distro-v3.1）时，以前直接取第一个；现在优先选与设计名称末尾（「sesame-robot - distro-v3.1」）同名的文件夹。
+
+## 16. EasyEDA 工程的 3D
+
+EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留 EasyEDA 原始单位（10 mil，却标成 mm）和层名（TopLayer / BottomLayer / Multi-Layer），3D 只认 KiCad 层名，焊盘全被跳过；EasyEDA 的 3D 模型按 EasyEDA 库 ID 引用、托管在 EasyEDA 服务器上，工程文件里没有。
+现在（`src/lib/maker/easyeda-3d.ts`）3D 拿到换算成毫米、层名改成 KiCad 的副本，焊盘正常显示；每个元件文件里的 `outline3D` 节点给出模型在板上的占位，据此画灰色外形体，高度取自模型名（…-H0.8、D8.0-H8.0），没写的按封装类型取常见高度。状态栏注明这是近似外形。真实 EasyEDA 模型需要服务器去 EasyEDA 取，本环境连不上，未做。
