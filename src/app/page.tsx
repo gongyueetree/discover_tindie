@@ -7,7 +7,8 @@ export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
 // Default tab: the existing Discover page, so the current tindie.com/discover iframe keeps its landing view.
-export default async function HomePage({ searchParams }: { searchParams?: { d?: string } }) {
+export default async function HomePage(props: { searchParams?: Promise<{ d?: string }> }) {
+  const searchParams = await props.searchParams;
   const open = /^\d{1,9}$/.test(searchParams?.d || "") ? Number(searchParams!.d) : undefined;
   return (
     <ToolShell tools={await canSeeTools()}>

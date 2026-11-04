@@ -65,14 +65,14 @@ export const placedComponentSchema = z.object({
     .object({
       description: z.string().optional(),
       family: z.string().optional(),
-      attributes: z.record(z.string()).optional(),
+      attributes: z.record(z.string(), z.string()).optional(),
       pins: z.number().optional(),
       datasheetUrl: z.string().optional(),
       imageUrl: z.string().optional(),
       stepUrl: z.string().optional(),
       sessionModelLost: z.boolean().optional(),
       anchorRef: z.string().optional(),
-      padNets: z.record(z.number()).optional(),
+      padNets: z.record(z.string(), z.number()).optional(),
       zOffsetMm: z.number().optional(),
       /** 3D 模型的摆正变换（来自 .kicad_pcb 的 (model) 节点：offset mm / rotate deg / scale） */
       modelTransform: z.object({
@@ -184,8 +184,8 @@ export const SchematicSheetSchema = z.object({
     name: z.string().optional(),
     noConnects: z.array(z.tuple([z.number(), z.number()])),
     /** libId → 符号定义原文（渲染用原始几何） */
-    libSymbols: z.record(z.string()),
-    legacySymbols: z.record(z.object({
+    libSymbols: z.record(z.string(), z.string()),
+    legacySymbols: z.record(z.string(), z.object({
       rects: z.array(z.object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number() })),
       polys: z.array(z.array(z.object({ x: z.number(), y: z.number() }))),
       circles: z.array(z.object({ cx: z.number(), cy: z.number(), r: z.number() })),
@@ -208,7 +208,7 @@ export const documentSchema = z.object({
   }),
   designIntent: z.object({ requirement: z.string(), rationale: z.string(), generatedAt: z.string() }).optional(),
   /** 导入工程的电气网络表（网络号 → 网络名），导出 PCB 时写回 */
-  nets: z.record(z.string()).optional(),
+  nets: z.record(z.string(), z.string()).optional(),
   // layer 用 string：'top'/'bottom' 别名 + 内层 KiCad 原名（In1.Cu…）；net 为源文件网络号
   tracks: z.array(z.object({ x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number(), w: z.number(), layer: z.string(), net: z.number().int().optional() })).optional(),
   vias: z.array(z.object({

@@ -7,7 +7,8 @@ import { TAXONOMY } from "@/lib/taxonomy";
 
 export const dynamic = "force-dynamic";
 
-export default async function DirectoryPage({ searchParams }: { searchParams: { cat?: string; q?: string } }) {
+export default async function DirectoryPage(props: { searchParams: Promise<{ cat?: string; q?: string }> }) {
+  const searchParams = await props.searchParams;
   const all = await getResources();
   const cat = searchParams.cat || "";
   const q = (searchParams.q || "").toLowerCase();

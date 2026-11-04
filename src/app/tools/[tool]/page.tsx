@@ -4,13 +4,14 @@ import { ToolClient } from "@/components/maker/ToolClient";
 
 const TOOLS = ["components", "circuits", "bom", "planner"];
 
-export default function Page({
-  params,
-  searchParams,
-}: {
-  params: { tool: string };
-  searchParams: Record<string, string | string[] | undefined>;
-}) {
+export default async function Page(
+  props: {
+    params: Promise<{ tool: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   if (params.tool === "resources") redirect("/");
   if (params.tool === "viewer") {
     const q = new URLSearchParams();

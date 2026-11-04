@@ -364,3 +364,20 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 | T03 依赖 | 单独的 PR：升级到 Next.js 16 + React 19 + 最新 next-auth（见 §24） |
 
 **仍未做**：GitHub 导入的 ZIP 仍是下载完成后同步压缩（不可中断，受 75 MB 上限约束）；浏览器端 CAD 解析的 Worker；人机验证（目前达到软阈值直接提示明天再来）；真实 Redis 多实例与 Vercel 上的大文件下载需在预览环境验收。
+
+## 24. 依赖升级（第三轮审计 T03）
+
+| 包 | 原版本 | 新版本 |
+|---|---|---|
+| next | 14.2.35（已停止支持） | 16.4.5 |
+| react / react-dom | 18.3.1 | 19.3.1 |
+| next-auth | 5.0.0-beta.20 | 5.0.0-beta.32 |
+| @auth/drizzle-adapter | 1.4.2 | 1.11.3 |
+| zod | 3.25.76 | 4.6.7（修复超大集合校验耗尽内存的告警） |
+| nanoid / postcss | 5.0.9 / 8.4.40 | 6.0.2 / 8.5.32 |
+
+`npm audit --omit=dev`：从 9 个受影响依赖（4 critical、4 high）降到 **0**。
+
+迁移内容：`middleware.ts` 改名为 Next 16 的 `proxy.ts`（Node 运行时）；页面和路由的 `params` / `searchParams` / `cookies()` 改为异步（官方 codemod + Maker 路由手动改）；`req.ip` 已移除，改读转发头；`experimental.serverComponentsExternalPackages` 改为 `serverExternalPackages`；Zod 4 的 `z.record` 需要显式键类型。构建默认改用 Turbopack。
+
+验证：`tsc`、36/36 检查、生产构建通过；本地生产服务器上首页、文章深链、归档、目录、标签页、三个工具页均 200；浏览器里打开 NSynth Super（原理图 / PCB / 3D）、PCB planner、登录后台（Design Picks）无页面错误；后台接口的 Zod 校验（非法 400 / 合法 200）正常。

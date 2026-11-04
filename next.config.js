@@ -15,11 +15,9 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
-  experimental: {
-    // Keep the Node 'postgres' driver out of the webpack bundle so it doesn't
-    // try to resolve its cloudflare:/node: variants. Loaded at runtime instead.
-    serverComponentsExternalPackages: ["postgres", "bcryptjs"],
-  },
+  // Keep the Node 'postgres' driver out of the server bundle so it doesn't
+  // try to resolve its cloudflare:/node: variants. Loaded at runtime instead.
+  serverExternalPackages: ["postgres", "bcryptjs"],
   async headers() {
     return [
       {
