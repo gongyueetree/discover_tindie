@@ -237,7 +237,8 @@ export async function designsBy(filter: DesignFilter, offset: number, visitor: s
         (fams.data.items || []).slice(0, 4).map((f: any) => designPool({ family: f.family || f.entity_id }, visitor).catch(() => [])),
       );
       const seen = new Set<string>();
-      pool = lists.flat().filter((d: DesignCard) => !seen.has(d.id) && seen.add(d.id));
+      // Each family list is deduplicated on its own; the same board can still arrive through two families.
+      pool = dedupeDesigns(lists.flat().filter((d: DesignCard) => !seen.has(d.id) && seen.add(d.id)));
     }
   } else pool = await designPool(filter, visitor);
   pool.sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0) || a.name.localeCompare(b.name));

@@ -313,3 +313,5 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 **环境变量**：需要 `ANTHROPIC_API_KEY`（每日发现已在用）和 `CRON_SECRET`；未配 `ANTHROPIC_API_KEY` 时什么都不写，不会生成没有依据的简介。建议配 `MAKER_GITHUB_TOKEN`（GitHub 搜索新仓库需要它）。费用：每天最多评 `DESIGN_PICKS_MAX_JUDGED`（默认 10）个候选，每个一次调用。
 
 **验证**：本环境连不上 GitHub 和 Claude API，整条流程用本地 Postgres + 模拟 GitHub + 模拟 Claude API 跑通（`scripts/design-picks-checks.ts` 覆盖纯逻辑）；真实效果需在预览上用后台按钮跑一次确认。
+
+补充：零件库还不支持按电路模块筛选时，模块列表由该模块最常见的几个器件族的设计拼成，原来只在每个器件族内部去重；同一块板子的两条记录分别从两个器件族进来时（hackrf-one 与 Opera Cake 那条），合并后的列表仍会出现两次。现在拼好之后再整体去重一次。
