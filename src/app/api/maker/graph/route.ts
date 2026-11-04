@@ -17,7 +17,7 @@ export function GET(req: NextRequest) {
 }
 
 async function graph(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.ip || "local";
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
   try {
     await rateLimit(ip);
     const focus = (req.nextUrl.searchParams.get("mpn") || "").trim();

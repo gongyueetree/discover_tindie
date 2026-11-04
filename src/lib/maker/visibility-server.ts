@@ -12,5 +12,5 @@ export async function canSeeTools() {
   } catch {
     role = undefined;
   }
-  return toolsAllowed(role, cookies().get(PREVIEW_COOKIE)?.value);
+  return toolsAllowed(role, (await cookies()).get(PREVIEW_COOKIE)?.value);
 }

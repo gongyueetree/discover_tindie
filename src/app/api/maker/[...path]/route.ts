@@ -38,7 +38,7 @@ const PART_ID = /^p_[a-z2-7]{8,40}$/;
 const DESIGN_ID = /^d_[a-z2-7]{8,40}$/;
 
 function clientIp(req: NextRequest) {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.ip || "local";
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
 }
 
 async function jsonBody(req: NextRequest, max: number) {
@@ -442,7 +442,10 @@ const SHARED = /^(modules|suppliers|picks|circuits|circuits\/d_[a-z2-7]+(?:\/cov
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
 const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^picks$|^kicad-symbols$|^translate$/;
-const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
-  oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
+// Next.js 16: route params arrive as a promise.
+const charged = async (req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) => {
+  const params = await ctx.params;
+  return oneVisitorCharge(() => handle(req, { params }), { passive: PASSIVE.test(params.path.join("/")) });
+};
 export const GET = charged;
 export const POST = charged;

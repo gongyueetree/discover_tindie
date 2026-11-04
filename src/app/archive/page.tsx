@@ -8,7 +8,8 @@ import { getPublishDates, getDiscoveriesByDate } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
-export default async function ArchivePage({ searchParams }: { searchParams: { date?: string } }) {
+export default async function ArchivePage(props: { searchParams: Promise<{ date?: string }> }) {
+  const searchParams = await props.searchParams;
   const dates = await getPublishDates();
   // If the requested date has no edition, jump to the closest one that does.
   if (searchParams.date && dates.length > 0 && !dates.includes(searchParams.date)) {

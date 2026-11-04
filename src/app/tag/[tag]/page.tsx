@@ -5,7 +5,8 @@ import { getDiscoveriesByTag } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
-export async function generateMetadata({ params }: { params: { tag: string } }) {
+export async function generateMetadata(props: { params: Promise<{ tag: string }> }) {
+  const params = await props.params;
   const tag = decodeURIComponent(params.tag);
   return {
     title: `#${tag} — Hardware Discovery`,
@@ -13,7 +14,8 @@ export async function generateMetadata({ params }: { params: { tag: string } }) 
   };
 }
 
-export default async function TagPage({ params }: { params: { tag: string } }) {
+export default async function TagPage(props: { params: Promise<{ tag: string }> }) {
+  const params = await props.params;
   const tag = decodeURIComponent(params.tag);
   const items = await getDiscoveriesByTag(tag);
 
