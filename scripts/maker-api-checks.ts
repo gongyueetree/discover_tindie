@@ -82,7 +82,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 
 async function main() {
   const { GET, POST } = await import("../src/app/api/maker/[...path]/route");
-  const get = (path: string) => GET(new NextRequest("http://localhost/api/maker/" + path, { headers: { "x-forwarded-for": "203.0.113.9" } }), { params: { path: path.split("?")[0].split("/") } });
+  const get = (path: string) => GET(new NextRequest("http://localhost/api/maker/" + path, { headers: { "x-forwarded-for": "203.0.113.9" } }), { params: Promise.resolve({ path: path.split("?")[0].split("/") }) });
 
   // search: lookup + prefix search, exact first, English display, signed headers
   let r = await get("parts?q=STM32F103C8T6");
@@ -158,7 +158,7 @@ async function main() {
     { id: "2", reference: "U2", quantity: 1, value: "", mpn: "LM358", manufacturer: "", package: "" },
     { id: "3", reference: "U3", quantity: 1, value: "", mpn: "NOPE12345", manufacturer: "", package: "" },
   ];
-  r = await POST(new NextRequest("http://localhost/api/maker/match", { method: "POST", body: JSON.stringify({ rows }) }), { params: { path: ["match"] } });
+  r = await POST(new NextRequest("http://localhost/api/maker/match", { method: "POST", body: JSON.stringify({ rows }) }), { params: Promise.resolve({ path: ["match"] }) });
   d = await r.json();
   assert.equal(r.status, 200);
   assert.deepEqual(d.rows.map((x: any) => x.status), ["exact", "review", "unmatched"]);
