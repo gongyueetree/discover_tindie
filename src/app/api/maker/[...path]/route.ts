@@ -264,6 +264,26 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
           "Vercel-CDN-Cache-Control": "max-age=2592000",
         },
       });
+    } else if (req.method === "GET" && head === "kicad-symbols" && path.length === 1) {
+      // Standard symbols for a KiCad 4/5 project published without its symbol cache (see
+      // lib/maker/kicad-legacy-symbols.ts). Public library data: shared by every visitor, CDN cached.
+      const version = q.get("v") === "5" ? 5 : 4;
+      const list = (k: string, max: number) =>
+        (q.get(k) || "").split(",").map((x) => x.trim()).filter((x) => /^[A-Za-z0-9_.+-]{1,64}$/.test(x)).slice(0, max);
+      const libs = list("libs", 40);
+      const names = list("names", 300);
+      if (!libs.length || !names.length) throw new SourceError("Name the libraries and symbols.", 400);
+      const { legacyStandardSymbols } = await import("@/lib/maker/kicad-legacy-symbols");
+      const out = await legacyStandardSymbols(version, libs, names);
+      return new Response(out.text, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Symbols-Found": String(out.found.length),
+          "X-Symbols-Missing": out.missing.join(",").slice(0, 2000),
+          "Cache-Control": "public, max-age=86400",
+          "Vercel-CDN-Cache-Control": "max-age=2592000",
+        },
+      });
     } else if (req.method === "GET" && head === "suppliers" && path.length === 1) {
       result = suppliersConnected();
     } else if (req.method === "GET" && head === "modules" && path.length === 1) {
@@ -421,7 +441,7 @@ async function matchBomRows(rows: BomRow[], visitor: string, deadline: number): 
 const SHARED = /^(modules|suppliers|picks|circuits|circuits\/d_[a-z2-7]+(?:\/cover)?|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
-const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^picks$|^translate$/;
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^picks$|^kicad-symbols$|^translate$/;
 const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
   oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
 export const GET = charged;

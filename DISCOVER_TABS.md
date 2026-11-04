@@ -364,3 +364,9 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 | T03 依赖 | 单独的 PR：升级到 Next.js 16 + React 19 + 最新 next-auth（见 §24） |
 
 **仍未做**：GitHub 导入的 ZIP 仍是下载完成后同步压缩（不可中断，受 75 MB 上限约束）；浏览器端 CAD 解析的 Worker；人机验证（目前达到软阈值直接提示明天再来）；真实 Redis 多实例与 Vercel 上的大文件下载需在预览环境验收。
+
+## 25. KiCad 4/5 工程缺少符号缓存时的原理图
+
+googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没有 `-cache.lib`：电阻、电容、GND、连接器、稳压器、光耦等 13 种标准符号没有图形，原理图上只剩引脚和 ✕。另外 KiCad 4 的元件不带库名（`L R R1`），原来连工程自带的 `custom.lib` 也查不到。
+
+现在：没有库名的元件按 KiCad 的做法依次在工程的库里查找；仍缺的符号，查看器按工程列出的库（KiCad 4：`.pro` 里的 LibName 顺序；KiCad 5：`库名:符号` 的库名）向 `/api/maker/kicad-symbols` 请求，服务端从 KiCad 官方库取出这些符号（KiCad 4 → GitHub KiCad/kicad-library 4.0.7；KiCad 5 → GitLab kicad-symbols 5.1.12），只返回需要的那几个，CDN 缓存。名字大小写不同（4.0.7 把 CONN_01X08 改名为 Conn_01x08）作为最后的匹配。查看器上方注明有几种符号来自 KiCad 标准库、可能与作者的略有不同。从 GitHub 导入时也会带上 `.pro` 列出的工程自带库（如 custom.lib）。

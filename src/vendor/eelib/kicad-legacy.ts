@@ -288,7 +288,53 @@ function resolveDefinition(libraries: LegacyLibraries, libId: string): { definit
     const alias = library.aliases.get(name);
     if (alias) return { definition: alias, value: name };
   }
+  // KiCad 4 names a component without a library ("L R R1"): KiCad searched the project's libraries in
+  // order, so do the same — the package's own libraries first, then the standard-library symbols the
+  // viewer fetched for what the package lacks (STANDARD_LIBRARY_PATH, added last). The same for a
+  // KiCad 5 nickname whose library is not in the package. A last pass ignores case (KiCad 4.0.7
+  // renamed CONN_01X08 to Conn_01x08, same pins).
+  for (const lib of libraries.byName.values()) {
+    const definition = lib.definitions.get(name) ?? lib.aliases.get(name);
+    if (definition) return { definition, value: name };
+  }
+  const lower = name.toLowerCase();
+  for (const lib of libraries.byName.values())
+    for (const [key, definition] of lib.definitions) if (key.toLowerCase() === lower) return { definition, value: name };
   return null;
+}
+
+/** Path the viewer gives the standard-library symbols it adds for a package without its symbol cache. */
+export const STANDARD_LIBRARY_PATH = "kicad-standard-library (added by the viewer).lib";
+
+/**
+ * Symbols a KiCad 4/5 project uses but does not contain (no `-cache.lib`, or an incomplete one), and
+ * where KiCad would have looked for them: KiCad 4 → the libraries listed in the `.pro` file, in order;
+ * KiCad 5 → the nicknames in the components' `lib:name`. Null when nothing is missing.
+ */
+export function missingLegacySymbols(assets: readonly InputAsset[]): { version: 4 | 5; libraries: string[]; names: string[] } | null {
+  const sheets = assets.filter((asset) => /\.sch$/i.test(asset.path) && isLegacySchematic(asset.bytes));
+  if (!sheets.length) return null;
+  const libraries = legacyLibraries(assets);
+  const missing = new Set<string>();
+  const nicknames = new Set<string>();
+  let nicknamed = false;
+  for (const sheet of sheets)
+    for (const m of decoder.decode(sheet.bytes).matchAll(/^L\s+(\S+)\s+\S+/gm)) {
+      const libId = m[1];
+      if (libId.includes(":")) {
+        nicknamed = true;
+        nicknames.add(libId.slice(0, libId.indexOf(":")));
+      }
+      if (!resolveDefinition(libraries, libId)) missing.add(libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
+    }
+  if (!missing.size) return null;
+  if (nicknamed) return { version: 5, libraries: [...nicknames], names: [...missing] };
+  const pro = assets.find((asset) => /\.pro$/i.test(asset.path));
+  const listed = pro
+    ? [...decoder.decode(pro.bytes).matchAll(/^LibName\d+=(.+)$/gm)].map((m) => baseName(m[1].trim()).replace(/\.lib$/i, "")).filter(Boolean)
+    : [];
+  // A KiCad 4 project without its .pro: KiCad's default library list starts with these.
+  return { version: 4, libraries: listed.length ? listed : ["power", "device", "conn", "transistors", "linear", "regul", "opto"], names: [...missing] };
 }
 
 /* ---------------------------------------------------------------------------
