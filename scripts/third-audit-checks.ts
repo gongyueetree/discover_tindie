@@ -156,7 +156,7 @@ void (async () => {
   limits.__setRedisForTests(fakeRedis());
   const A = { ip: "net-1", sid: "a".repeat(32) };
   const B = { ip: "net-1", sid: "b".repeat(32) };
-  const as = <T>(w: typeof A, fn: () => Promise<T>) => ctx.withRequestDeadline(5_000, undefined, fn, w);
+  const as = <T>(w: { ip: string; sid: string | null }, fn: () => Promise<T>) => ctx.withRequestDeadline(5_000, undefined, fn, w);
   for (const id of ["p1", "p2", "p3", "p1", "p2"]) await as(A, () => limits.noteResource("detail", id));
   await assert.rejects(as(A, () => limits.noteResource("detail", "p4")), (e: any) => e.status === 429, "4th different item for one visitor");
   await as(B, () => limits.noteResource("detail", "p5"));
