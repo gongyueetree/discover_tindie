@@ -277,3 +277,8 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 
 EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留 EasyEDA 原始单位（10 mil，却标成 mm）和层名（TopLayer / BottomLayer / Multi-Layer），3D 只认 KiCad 层名，焊盘全被跳过；EasyEDA 的 3D 模型按 EasyEDA 库 ID 引用、托管在 EasyEDA 服务器上，工程文件里没有。
 现在（`src/lib/maker/easyeda-3d.ts`）3D 拿到换算成毫米、层名改成 KiCad 的副本，焊盘正常显示；每个元件文件里的 `outline3D` 节点给出模型在板上的占位，据此画灰色外形体，高度取自模型名（…-H0.8、D8.0-H8.0），没写的按封装类型取常见高度。状态栏注明这是近似外形。真实 EasyEDA 模型需要服务器去 EasyEDA 取，本环境连不上，未做。
+
+## 17. EasyEDA 真实 3D 模型；同仓库多块板子的卡片
+
+- **EasyEDA 3D 模型**：工程里每个元件的 `outline3D` 节点带 EasyEDA 模型 ID。新增 `/api/maker/easyeda-model/{uuid}` 由服务端转发 EasyEDA 自己的模型（`modules.easyeda.com/3dmodel/{uuid}`，OBJ，毫米；浏览器跨域取不到），CDN 缓存 30 天，不计访客查询。浏览器解析 OBJ（内嵌材质颜色），按 EasyEDA / easyeda2kicad 的放置规则：以 3D 外形中心为准，底面贴板面再加 `z` 偏移，`c_rotation` 旋转（Z 向取与外形尺寸吻合的方向）。模型尺寸与外形差 3 倍以上视为不符，保留灰色外形体。同一模型只取一次。状态栏写明加载了几个、其余是近似外形。本环境连不上 EasyEDA，真实模型的效果需在预览/线上确认；机制用模拟 OBJ 测过。
+- **同一仓库里的多块板子**（如 greatscottgadgets/hackrf 的 hackrf-one 与 operacake）：卡片注明「In 仓库 · 文件夹」；图片先找仓库里以文件夹命名的图片（`docs/images/operacake.jpeg`，照片优先于框图），找不到再用仓库的图。

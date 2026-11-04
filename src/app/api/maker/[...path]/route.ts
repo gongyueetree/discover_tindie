@@ -1,5 +1,5 @@
 import { translateTexts, englishParts } from "@/lib/maker/translation";
-import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable } from "@/lib/maker/github-server";
+import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable, githubFolderImage } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
 import { matchRow } from "@/lib/maker/bom";
@@ -179,7 +179,9 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
         url:
           d.kind === "vendor"
             ? await vendorImage(d.sourceUrl)
-            : d.coverImageUrl ||
+            : // A board in a folder of a larger repository: its own picture before the repository's.
+              (gh?.subdir ? await githubFolderImage(gh.repo, gh.commit, gh.subdir) : null) ||
+              d.coverImageUrl ||
               (gh ? (await githubReadme(gh.repo, gh.commit, gh.subdir)).image : null) ||
               (d.boardPreview ? `/api/maker/circuits/${a}/board.svg` : null) ||
               // Last resort: the repository's social preview (its own image if set, else GitHub's card).
@@ -205,6 +207,26 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       const d = hasDb ? await (await import("@/lib/queries")).getDiscovery(Number(a)).catch(() => null) : null;
       if (!d || d.status !== "published") throw new SourceError("Not found", 404);
       result = { github: await (await import("@/lib/maker/discovery-repo")).discoveryRepo(d.id, d.sourceUrl) };
+    } else if (req.method === "GET" && head === "easyeda-model" && path.length === 2 && /^[0-9a-f]{32}$/.test(a)) {
+      // A part's 3D model from EasyEDA's library (OBJ text, mm), as EasyEDA's own viewer loads it. The
+      // project names it by id; the browser cannot fetch it cross-origin, so this route relays it.
+      let r: Response;
+      try {
+        r = await fetch(`https://modules.easyeda.com/3dmodel/${a}`, { signal: AbortSignal.timeout(20000), redirect: "error", cache: "no-store" });
+      } catch {
+        throw new SourceError("EasyEDA's model server is unreachable.", 502);
+      }
+      if (!r.ok) throw new SourceError(r.status === 404 ? "EasyEDA has no such model." : "EasyEDA's model server failed.", r.status === 404 ? 404 : 502);
+      const text = await r.text();
+      if (text.length > 20 * 1024 * 1024 || !/^\s*(v|newmtl|#|o|g)\s/m.test(text)) throw new SourceError("Unexpected model data from EasyEDA.", 502);
+      return new Response(text, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "public, max-age=86400",
+          "Vercel-CDN-Cache-Control": "max-age=2592000",
+        },
+      });
     } else if (req.method === "GET" && head === "suppliers" && path.length === 1) {
       result = suppliersConnected();
     } else if (req.method === "GET" && head === "modules" && path.length === 1) {
@@ -342,10 +364,10 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
  * module or family, one design, one part, and knowledge-graph rankings. Searches (parts?q=, designs
  * by part number) are not shared: each counts as the visitor's own query.
  */
-const SHARED = /^(modules|suppliers|circuits|circuits\/d_[a-z2-7]+|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
+const SHARED = /^(modules|suppliers|circuits|circuits\/d_[a-z2-7]+(?:\/cover)?|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
-const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^modules$|^suppliers$|^translate$/;
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^translate$/;
 const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
   oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
 export const GET = charged;

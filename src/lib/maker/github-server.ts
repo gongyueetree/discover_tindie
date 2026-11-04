@@ -487,6 +487,56 @@ export function githubReadme(repo: string, commit: string | null, subdir = ""): 
   return value;
 }
 
+/* ------------------------------------------------------------------ a board's own picture in a shared repository */
+
+const folderImages = new Map<string, { until: number; value: Promise<string | null> }>();
+const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * For a design kept in a folder of a larger repository (greatscottgadgets/hackrf → hardware/operacake),
+ * a picture of that board rather than the repository's: an image file named after the folder
+ * (docs/images/operacake.jpeg), preferring photos over diagrams. One tree listing per repository and
+ * ref, cached a day; null when none is named for it.
+ */
+export function githubFolderImage(repo: string, commit: string | null, subdir: string): Promise<string | null> {
+  const base = norm(subdir.split("/").filter(Boolean).pop() || "");
+  if (base.length < 4 || !/^[\w.-]+\/[\w.-]+$/.test(repo) || (commit && !/^[\w.-]{1,100}$/.test(commit))) return Promise.resolve(null);
+  const ref = commit || "HEAD";
+  const key = `${repo}@${ref}/${base}`;
+  const hit = folderImages.get(key);
+  if (hit && hit.until > Date.now()) return hit.value;
+  if (folderImages.size > 1000) folderImages.clear();
+  let failed = false;
+  const value = (async () => {
+    let tree: any;
+    try {
+      tree = await github(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
+    } catch {
+      failed = true;
+      return null;
+    }
+    const scored = ((tree?.tree ?? []) as { path: string; type: string; size?: number }[])
+      .filter((f) => f.type === "blob" && /\.(png|jpe?g|webp|gif)$/i.test(f.path) && (f.size ?? 0) > 2000 && (f.size ?? 0) < 8_000_000)
+      .map((f) => {
+        const stem = norm(f.path.split("/").pop()!.replace(/\.[^.]+$/, ""));
+        let score = stem === base ? 6 : stem.startsWith(base) ? 4 : stem.includes(base) ? 3 : 0;
+        if (!score) return null;
+        if (/\.(jpe?g|webp)$/i.test(f.path)) score += 1;
+        if (/diagram|schematic|block|logo|icon|footprint|layout|gerber|silk|drill/i.test(f.path)) score -= 3;
+        if (f.path.startsWith(subdir.replace(/\/$/, "") + "/")) score += 1;
+        return { path: f.path, score };
+      })
+      .filter((x): x is { path: string; score: number } => !!x && x.score > 0)
+      .sort((a, b) => b.score - a.score || a.path.length - b.path.length);
+    return scored[0] ? `https://raw.githubusercontent.com/${repo}/${ref}/${scored[0].path.split("/").map(encodeURIComponent).join("/")}` : null;
+  })();
+  folderImages.set(key, { until: Date.now() + 86_400_000, value });
+  value.then(() => {
+    if (failed) folderImages.set(key, { until: Date.now() + 10 * 60_000, value });
+  });
+  return value;
+}
+
 /** owner/repo, ref and folder of a github.com repository / tree URL (null for anything else). */
 export function githubRepoOf(url: string) {
   const m = url.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/tree\/([\w.-]+)(?:\/(.*?))?)?\/?$/);
