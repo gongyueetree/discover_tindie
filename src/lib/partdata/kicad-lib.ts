@@ -1,4 +1,5 @@
 import "server-only";
+import { sharedFetchSignal } from "@/lib/maker/request-context";
 import index from "@/data/kicad-index.json";
 import { previewFootprint, previewSymbol } from "@/vendor/eelib/ecad/preview";
 import { applySymbolTypography } from "@/lib/maker/symbol-typography";
@@ -85,7 +86,7 @@ function fetchText(url: string) {
   if (hit && hit.until > Date.now()) return hit.text;
   if (files.size > 500) files.clear();
   const text = (async () => {
-    const r = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(15000), next: { revalidate: 86400 } });
+    const r = await fetch(url, { redirect: "error", signal: sharedFetchSignal(15000), next: { revalidate: 86400 } });
     if (!r.ok) throw Error(`KiCad library returned HTTP ${r.status}`);
     return new TextDecoder().decode(await boundedBody(r.body, 4 * 1024 * 1024));
   })();

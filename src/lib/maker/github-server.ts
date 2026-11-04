@@ -1,4 +1,5 @@
 import "server-only";
+import { sharedFetchSignal } from "./request-context";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { zipSync } from "fflate";
 import { SourceError } from "./server";
@@ -53,7 +54,7 @@ async function github(path: string) {
       r = await fetch(url, {
         headers: headers(),
         redirect: "manual",
-        signal: AbortSignal.timeout(30000),
+        signal: sharedFetchSignal(30000),
         cache: "no-store",
       });
     } catch (e) {
@@ -326,7 +327,7 @@ export async function importGithub(selection: string, projectId: string) {
     const r = await fetch(url, {
       headers: { "User-Agent": "Tindie-Maker-Tools" },
       redirect: "error",
-      signal: AbortSignal.timeout(Math.max(1000, Math.min(25000, deadline - Date.now()))),
+      signal: sharedFetchSignal(Math.max(1000, Math.min(25000, deadline - Date.now()))),
     });
     if (!r.ok)
       throw new SourceError(`Unable to read selected file: ${path}`, 502);

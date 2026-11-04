@@ -1,3 +1,5 @@
+import { identify } from "@/lib/maker/identify";
+import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { limitRoute } from "@/lib/maker/limits";
 import { NextRequest, NextResponse } from "next/server";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
@@ -14,7 +16,7 @@ async function read(url: string, json = true) {
   if (old && Date.now() - old.at < 3600000) return old.data;
   const r = await fetch(url, {
     redirect: "error",
-    signal: AbortSignal.timeout(25000),
+    signal: fetchSignal(25000),
   });
   if (!r.ok) throw Error(`Library returned HTTP ${r.status}`);
   const bytes = await boundedBody(r.body, 2 * 1024 * 1024);
@@ -24,8 +26,8 @@ async function read(url: string, json = true) {
   cache.set(url, { at: Date.now(), data });
   return data;
 }
-export function GET(req: NextRequest) {
-  return oneVisitorCharge(() => library(req));
+export async function GET(req: NextRequest) {
+  return withRequestDeadline(50_000, req.signal, () => oneVisitorCharge(() => library(req)), await identify(req));
 }
 
 async function library(req: NextRequest) {
