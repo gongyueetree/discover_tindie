@@ -1,11 +1,24 @@
+import { identify } from "@/lib/maker/identify";
+import { noteResource } from "@/lib/maker/limits";
+import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { peekStream } from "@/lib/maker/stream-body";
 import { limitRoute } from "@/lib/maker/limits";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 // Public library assets only. No caller-provided hosts, redirects or credentials.
+/** Within one deadline and the client's cancel signal: the upstream download stops if the visitor leaves. */
 export async function GET(request: Request) {
+  return withRequestDeadline(27000, request.signal, () => get(request), await identify(request));
+}
+
+async function get(request: Request) {
   const limited = await limitRoute(request, "files");
   if (limited) return limited;
+  try {
+    await noteResource("file", "kicad3d:" + (new URL(request.url).searchParams.get("path") || ""));
+  } catch (e) {
+    return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
+  }
   const params = new URL(request.url).searchParams,
     path = params.get("path") ?? "",
     revision = params.get("revision") ?? "master";
@@ -24,7 +37,7 @@ export async function GET(request: Request) {
     let upstream: Response | undefined;
     try {
       upstream = await fetch(url, {
-        signal: AbortSignal.timeout(18000),
+        signal: fetchSignal(18000),
         redirect: "error",
         next: { revalidate: 86400 },
       });
@@ -35,7 +48,7 @@ export async function GET(request: Request) {
     if ((!upstream || !upstream.ok) && revision === "master") {
       await upstream?.body?.cancel();
       upstream = await fetch(mirrorUrl, {
-        signal: AbortSignal.timeout(9000),
+        signal: fetchSignal(9000),
         redirect: "error",
         next: { revalidate: 86400 },
       });
@@ -61,7 +74,7 @@ export async function GET(request: Request) {
     if (!valid(body.head) && revision === "master" && !mirror) {
       await body.cancel();
       const fallback = await fetch(mirrorUrl, {
-        signal: AbortSignal.timeout(9000),
+        signal: fetchSignal(9000),
         redirect: "error",
         next: { revalidate: 86400 },
       });

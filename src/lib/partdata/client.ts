@@ -1,4 +1,5 @@
 import "server-only";
+import { sharedFetchSignal } from "@/lib/maker/request-context";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -128,7 +129,7 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
       method,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(20000),
+      signal: sharedFetchSignal(20000),
       headers: {
         Accept: "application/json",
         "X-Api-Key": KEY(),
@@ -192,7 +193,7 @@ export async function pdProbe() {
   try {
     const r = await fetch(base + path, {
       cache: "no-store",
-      signal: AbortSignal.timeout(15000),
+      signal: sharedFetchSignal(15000),
       headers: {
         Accept: "application/json",
         "X-Api-Key": KEY(),
@@ -237,7 +238,7 @@ export function pdGetRaw(
       r = await fetch(BASE() + path, {
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(45000),
+        signal: sharedFetchSignal(45000),
         headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
       });
     } catch {
@@ -269,7 +270,7 @@ export async function pdGetStream(path: string, max: number): Promise<{ type: st
     r = await fetch(BASE() + path, {
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(45000),
+      signal: sharedFetchSignal(45000),
       headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
     });
   } catch {

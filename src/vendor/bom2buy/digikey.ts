@@ -1,3 +1,4 @@
+import { fetchSignal } from "@/lib/maker/request-context";
 /* ============================================================
    DigiKey API v4 服务端客户端（仅在 API Route 中使用，Key 不出服务器）
    - 2-legged OAuth（client_credentials）：Product Information v4 支持
@@ -31,7 +32,7 @@ async function getToken(): Promise<string> {
       client_id: process.env.DIGIKEY_CLIENT_ID || "",
       client_secret: process.env.DIGIKEY_CLIENT_SECRET || "",
     }),
-    cache: "no-store", signal: AbortSignal.timeout(15000),
+    cache: "no-store", signal: fetchSignal(15000),
   });
   if (!resp.ok) {
     const body = await resp.text();
@@ -110,7 +111,7 @@ export async function keywordSearch(keyword: string, limit = 3): Promise<DkProdu
     method: "POST",
     headers: headers(token),
     body: JSON.stringify({ Keywords: keyword, Limit: limit, Offset: 0 }),
-    cache: "no-store", signal: AbortSignal.timeout(15000),
+    cache: "no-store", signal: fetchSignal(15000),
   });
   if (resp.status === 429) throw new Error("RATE_LIMITED");
   if (!resp.ok) throw new Error(`keywordSearch ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -130,7 +131,7 @@ export async function substitutions(dkPartNumber: string): Promise<DkProduct[]> 
   try {
     const token = await getToken();
     const resp = await fetch(`${base()}/products/v4/search/${encodeURIComponent(dkPartNumber)}/substitutions`, {
-      headers: headers(token), cache: "no-store", signal: AbortSignal.timeout(15000),
+      headers: headers(token), cache: "no-store", signal: fetchSignal(15000),
     });
     if (!resp.ok) return [];
     const data = await resp.json();

@@ -1,12 +1,25 @@
+import { identify } from "@/lib/maker/identify";
+import { noteResource } from "@/lib/maker/limits";
+import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { limitRoute } from "@/lib/maker/limits";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 
 /** Only the manufacturer's public KiCad model directory; no user-supplied URL/host. */
+/** Within one deadline and the client's cancel signal: the upstream download stops if the visitor leaves. */
 export async function GET(request: Request) {
+  return withRequestDeadline(27000, request.signal, () => get(request), await identify(request));
+}
+
+async function get(request: Request) {
   const limited = await limitRoute(request, "files");
   if (limited) return limited;
+  try {
+    await noteResource("file", "esp3d:" + new URL(request.url).search);
+  } catch (e) {
+    return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
+  }
   const path = new URL(request.url).searchParams.get("path") ?? "";
   if (!/^[\w.+()-]+\.(step|stp|wrl)$/i.test(path))
     return new Response("Invalid model path", { status: 400 });
@@ -18,7 +31,7 @@ export async function GET(request: Request) {
     });
   try {
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(20000),
+      signal: fetchSignal(20000),
       redirect: "error",
       next: { revalidate: 86400 },
     });

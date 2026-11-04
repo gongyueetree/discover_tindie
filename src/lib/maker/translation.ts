@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchSignal, requestDeadline } from "./request-context";
 import { createHash } from "node:crypto";
 import { hasChinese, terminology } from "./english";
 import type { Part } from "./types";
@@ -10,7 +11,7 @@ const cache = new Map<string, string>();
  * budget first — the visitor's when `visitorKey` is given, otherwise the server's own share of the
  * site budget. Over budget (or without a working ledger) the glossary translation is used instead.
  */
-export async function translateTexts(texts: string[], visitorKey: string | null = null, deadline = Date.now() + 20_000): Promise<string[]> {
+export async function translateTexts(texts: string[], visitorKey: string | null = null, deadline = requestDeadline(20_000)): Promise<string[]> {
   const unique = [...new Set(texts.filter(hasChinese))];
   const pending = unique.filter(
     (t) => !cache.has(t) && hasChinese(terminology(t)),
@@ -38,6 +39,8 @@ export async function translateTexts(texts: string[], visitorKey: string | null 
         if (deadline - Date.now() < 3_000) break;
         // Azure bills the characters submitted: reserve exactly those, before sending.
         if (!(await reserveTranslation(visitorKey, body.reduce((n, b) => n + b.Text.length, 0)))) break;
+        // Reserving can itself be slow: check the time again right before sending.
+        if (deadline - Date.now() < 2_000) break;
         const r = await fetch(
           "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&from=zh-Hans&to=en",
           {
@@ -53,7 +56,7 @@ export async function translateTexts(texts: string[], visitorKey: string | null 
                 : {}),
             },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(Math.max(1_000, Math.min(15_000, deadline - Date.now() - 1_000))),
+            signal: fetchSignal(Math.max(1_000, Math.min(15_000, deadline - Date.now() - 1_000))), // also aborts at the request deadline
             cache: "no-store",
           },
         );

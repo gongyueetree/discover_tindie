@@ -1,3 +1,4 @@
+import { fetchSignal, remainingMs, requestDeadline } from "@/lib/maker/request-context";
 import { rankParts } from "./rank-parts";
 import "server-only";
 import { createHash } from "node:crypto";
@@ -6,7 +7,7 @@ import { keywordSearch } from "@/vendor/bom2buy/digikey";
 import { PartdataError } from "@/lib/partdata/client";
 import { searchPartdata, status as partdataStatus } from "@/lib/partdata/maker";
 import type { Part, ProviderStatus } from "./types";
-import { limitRequest, reserveSupplierCall, supplierCached, supplierCacheKey, supplierCooldown, supplierCoolingDown, type Bucket, type Provider } from "./limits";
+import { limitVisitor, reserveSupplierCall, supplierCached, supplierCacheKey, supplierCooldown, supplierCoolingDown, SupplierUnavailable, type Bucket, type Provider } from "./limits";
 export class SourceError extends Error {
   constructor(
     message: string,
@@ -45,7 +46,7 @@ export async function search(
   q: string,
   visitor: string,
   includeSuppliers = false,
-  { partdata = true, deadline = Date.now() + 45_000 }: { partdata?: boolean; /** epoch ms the whole request must finish by */ deadline?: number } = {},
+  { partdata = true, deadline = requestDeadline() }: { partdata?: boolean; /** epoch ms the whole request must finish by */ deadline?: number } = {},
 ) {
   const parts: Part[] = [];
   const statuses: ProviderStatus[] = [];
@@ -87,7 +88,7 @@ export async function search(
 }
 /** Per-visitor request rate (shared across instances when Redis is configured; see limits.ts). */
 export async function rateLimit(ip: string, bucket: Bucket = "api") {
-  await limitRequest(createHash("sha256").update(ip).digest("hex").slice(0, 32), bucket);
+  await limitVisitor(bucket, createHash("sha256").update(ip).digest("hex").slice(0, 32));
 }
 
 const COOLDOWN_MSG: Record<Provider, string> = { digikey: "DigiKey asked us to slow down; live prices resume shortly", mouser: "Mouser asked us to slow down; live prices resume shortly" };
@@ -110,19 +111,25 @@ async function supplierLookup(
     statuses.push({ source, status: "unconfigured" });
     return;
   }
-  // Leave time to rank, translate and answer: a lookup that cannot finish in time is not started.
-  const room = deadline - Date.now() - 4_000;
-  if (room < 3_000) {
-    statuses.push({ source, status: "error", message: "Skipped to keep this request fast — retry for live prices" });
+  // Time left in this request (the explicit deadline, or the request's own if that is sooner).
+  const left = () => Math.min(deadline - Date.now(), remainingMs());
+  const SKIP = "Skipped to keep this request fast — retry for live prices";
+  if (left() < 7_000) {
+    statuses.push({ source, status: "error", message: SKIP });
     return;
   }
   const key = supplierCacheKey(provider, q);
   try {
     const { value } = await supplierCached(key, async () => {
       if (await supplierCoolingDown(provider)) throw new SupplierSkip(COOLDOWN_MSG[provider]);
+      // Checked again after waiting for the cache / lock: never start a paid call that cannot finish.
+      if (left() < 7_000) throw new SupplierSkip(SKIP);
       if (!(await reserveSupplierCall(provider, visitor))) throw new SupplierSkip("Live distributor lookups are paused for today (usage limit reached)");
-      return withTimeout(load(q), Math.min(room, 30_000));
-    });
+      if (left() < 5_000) throw new SupplierSkip(SKIP);
+      // The fetches below use the request's signal: at the deadline (or if the visitor leaves) the
+      // network request itself is aborted. Quota reserved for a call already sent is not refunded.
+      return load(q);
+    }, Date.now() + Math.max(0, left() - 4_000));
     parts.push(...value.map((p) => ({ ...p, offers: p.offers.map((o) => ({ ...o })) })));
     statuses.push({ source, status: "ready" });
   } catch (e) {
@@ -132,7 +139,7 @@ async function supplierLookup(
       source,
       status: "error",
       message:
-        e instanceof SupplierSkip
+        e instanceof SupplierSkip || e instanceof SupplierUnavailable
           ? m
           : m === "RATE_LIMITED"
             ? `${provider === "digikey" ? "DigiKey" : "Mouser"} daily API quota used up`
@@ -143,11 +150,7 @@ async function supplierLookup(
   }
 }
 class SupplierSkip extends Error {}
-/** The answer, or a timeout error once `ms` have passed (the request does not wait any longer). */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: ReturnType<typeof setTimeout>;
-  return Promise.race([p, new Promise<T>((_, reject) => (t = setTimeout(() => reject(new Error("timeout")), ms)))]).finally(() => clearTimeout(t));
-}
+
 
 async function digikeyParts(q: string): Promise<Part[]> {
   return (await keywordSearch(q, 8)).map((p) => ({
@@ -179,7 +182,7 @@ async function mouserParts(q: string): Promise<Part[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ SearchByKeywordRequest: { keyword: q, records: 8, startingRecord: 0, searchOptions: "None" } }),
-    signal: AbortSignal.timeout(15000),
+    signal: fetchSignal(15000),
   });
   if (r.status === 429) throw Object.assign(Error("RATE_LIMITED"), { retryAfter: Number(r.headers.get("retry-after")) || 0 });
   if (!r.ok) throw Error();

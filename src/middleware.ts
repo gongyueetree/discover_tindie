@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth.edge";
 import { PREVIEW_COOKIE, previewKeyMatches, toolsAllowed } from "@/lib/maker/visibility";
+import { SESSION_COOKIE, newSessionValue, verifySession } from "@/lib/maker/session";
 
-export default auth((req) => {
+export default auth(async (req) => {
   const { pathname } = req.nextUrl;
   const role = (req.auth?.user as { role?: string } | undefined)?.role;
 
@@ -32,7 +33,16 @@ export default auth((req) => {
   }
   const isTools = pathname.startsWith("/tools/") || pathname.startsWith("/api/maker/") || pathname.startsWith("/api/models/");
   if (isTools) {
-    if (toolsAllowed(role, req.cookies.get(PREVIEW_COOKIE)?.value)) return NextResponse.next();
+    if (toolsAllowed(role, req.cookies.get(PREVIEW_COOKIE)?.value)) {
+      const res = NextResponse.next();
+      // Anonymous visitor session (lib/maker/session.ts): issued once, no sign-up. SameSite=None so it
+      // also works inside the tindie.com iframe where the browser allows it; without it, the IP is used.
+      if (!(await verifySession(req.cookies.get(SESSION_COOKIE)?.value))) {
+        const value = await newSessionValue();
+        if (value) res.cookies.set(SESSION_COOKIE, value, { httpOnly: true, secure: true, sameSite: "none", path: "/", maxAge: 30 * 86400 });
+      }
+      return res;
+    }
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const url = req.nextUrl.clone();
     url.pathname = "/";

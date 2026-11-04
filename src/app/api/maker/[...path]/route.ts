@@ -1,8 +1,11 @@
+import { fetchSignal, requestDeadline, withRequestDeadline } from "@/lib/maker/request-context";
 import { translateTexts, englishParts } from "@/lib/maker/translation";
 import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable, githubFolderImage } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
 import { chunkStream, peekStream } from "@/lib/maker/stream-body";
+import { noteResource, withTaskSlot } from "@/lib/maker/limits";
+import { identify } from "@/lib/maker/identify";
 import { matchRow } from "@/lib/maker/bom";
 import { visitorHash, pdGetRaw, pdGetStream, oneVisitorCharge } from "@/lib/partdata/client";
 import { cadPreview, ezplmFile } from "@/lib/partdata/kicad-lib";
@@ -48,14 +51,20 @@ async function jsonBody(req: NextRequest, max: number) {
   }
 }
 
-async function handle(req: NextRequest, { params }: { params: { path: string[] } }) {
+/** Every Maker request runs inside one 50 s deadline and the client's cancel signal (request-context). */
+async function handle(req: NextRequest, ctx: { params: { path: string[] } }) {
+  return withRequestDeadline(50_000, req.signal, () => handleRequest(req, ctx), await identify(req));
+}
+
+async function handleRequest(req: NextRequest, { params }: { params: { path: string[] } }) {
   const path = params.path;
   const q = req.nextUrl.searchParams;
   const ip = clientIp(req);
   const visitor = visitorHash(ip);
   const [head, a] = path;
-  // One deadline for the whole request (maxDuration is 60 s): every upstream step works within it.
-  const deadline = Date.now() + 50_000;
+  // The request's deadline (see handle): searches, BOM matching and translation all work within it,
+  // and every outgoing fetch is aborted when it passes or the visitor leaves.
+  const deadline = requestDeadline();
   let result: any;
   try {
     await rateLimit(ip);
@@ -76,12 +85,13 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       if (a === "scan") {
         if (typeof body.url !== "string" || body.url.length > 1000) throw new SourceError("Invalid GitHub URL.", 400);
         await rateLimit(ip, "github");
-        result = await scanGithub(body.url);
+        result = await withTaskSlot(() => scanGithub(body.url));
       } else if (a === "import") {
         if (typeof body.token !== "string" || typeof body.project !== "string")
           throw new SourceError("Select a project first.", 400);
         await rateLimit(ip, "github");
-        const archive = await importGithub(body.token, body.project);
+        await noteResource("file", "import:" + body.project.slice(0, 120));
+        const archive = await withTaskSlot(() => importGithub(body.token, body.project));
         return new Response(chunkStream(archive.bytes), {
           headers: {
             "Content-Type": "application/zip",
@@ -96,6 +106,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       if (query.length < 2 || query.length > 120) throw new SourceError("Enter 2–120 characters.", 400);
       result = await search(query, visitor, false, { deadline });
     } else if (req.method === "GET" && head === "parts" && path.length === 2 && PART_ID.test(a)) {
+      await noteResource("detail", a);
       const [part] = await englishParts([await partDetail(a, visitor)], visitor);
       result = { part };
     } else if (req.method === "GET" && head === "cad" && path.length === 2 && PART_ID.test(a)) {
@@ -106,6 +117,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "cad" && path.length === 3 && PART_ID.test(a) && ["symbol", "footprint", "model"].includes(path[2])) {
       // A part's file from ezPLM's own library (partdata signs and meters the request).
       const kind = path[2] as "symbol" | "footprint" | "model";
+      await noteResource("file", `cad:${a}:${kind}`);
       const part = await partDetail(a, visitor);
       if (!part.ezplmLibrary?.[kind]) throw new SourceError("ezPLM's library has no such file for this part.", 404);
       // Models (up to 15 MB) stream through with a byte cap; symbols and footprints are small text.
@@ -209,6 +221,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       const info = gh ? await githubReadme(gh.repo, gh.commit, gh.subdir) : null;
       result = { intro: info?.intro || null, readmeUrl: info?.readmeUrl || null };
     } else if (req.method === "GET" && head === "circuits" && path.length === 2 && DESIGN_ID.test(a)) {
+      await noteResource("detail", a);
       const design = await designDetail(a, visitor);
       result = { design, github: design.kind === "open_source" ? githubSource(design.sourceUrl) : null };
     } else if (req.method === "GET" && head === "discoveries" && path.length === 3 && /^\d{1,9}$/.test(a) && path[2] === "design") {
@@ -223,11 +236,12 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       const hasDb = Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
       result = { items: hasDb ? await (await import("@/lib/design-picks")).recentPicks().catch(() => []) : [] };
     } else if (req.method === "GET" && head === "easyeda-model" && path.length === 2 && /^[0-9a-f]{32}$/.test(a)) {
+      await noteResource("file", "easyeda:" + a);
       // A part's 3D model from EasyEDA's library (OBJ text, mm), as EasyEDA's own viewer loads it. The
       // project names it by id; the browser cannot fetch it cross-origin, so this route relays it.
       let r: Response;
       try {
-        r = await fetch(`https://modules.easyeda.com/3dmodel/${a}`, { signal: AbortSignal.timeout(20000), redirect: "error", cache: "no-store" });
+        r = await fetch(`https://modules.easyeda.com/3dmodel/${a}`, { signal: fetchSignal(20000), redirect: "error", cache: "no-store" });
       } catch {
         throw new SourceError("EasyEDA's model server is unreachable.", 502);
       }
@@ -288,7 +302,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
           throw new SourceError("Invalid BOM row.", 400);
         return { ...row, reference: String(row.reference || row.id).slice(0, 300), original: {}, status: "unmatched" };
       });
-      result = { rows: await matchBomRows(rows, visitor, deadline) };
+      result = { rows: await withTaskSlot(() => matchBomRows(rows, visitor, deadline)) };
     } else throw new SourceError("Not found", 404);
 
     const res = NextResponse.json(result);

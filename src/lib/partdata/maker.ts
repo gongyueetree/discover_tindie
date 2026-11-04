@@ -1,4 +1,5 @@
 import "server-only";
+import { sharedFetchSignal } from "@/lib/maker/request-context";
 import { pdGet, pdPost, PartdataError, partdataConfigured } from "./client";
 import { compareParts, type ComparePart } from "@/lib/maker/compare";
 import { ezplmFile } from "./kicad-lib";
@@ -653,7 +654,7 @@ export function vendorImage(sourceUrl: string): Promise<string | null> {
     try {
       const r = await fetch(u, {
         redirect: "follow",
-        signal: AbortSignal.timeout(6000),
+        signal: sharedFetchSignal(6000),
         headers: { "User-Agent": "Mozilla/5.0 (compatible; TindieDiscover/1.0)", Accept: "text/html" },
       });
       const finalHost = new URL(r.url).hostname.replace(/^www\./, "");

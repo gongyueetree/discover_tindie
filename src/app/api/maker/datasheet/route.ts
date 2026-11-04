@@ -1,3 +1,6 @@
+import { identify } from "@/lib/maker/identify";
+import { noteResource } from "@/lib/maker/limits";
+import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { limitRoute } from "@/lib/maker/limits";
 import { NextRequest } from "next/server";
 import { peekStream } from "@/lib/maker/stream-body";
@@ -42,12 +45,22 @@ function allowed(u: URL) {
     ].some((h) => u.hostname === h || u.hostname.endsWith("." + h))
   );
 }
+/** Within one deadline and the client's cancel signal: the upstream download stops if the visitor leaves. */
 export async function GET(req: NextRequest) {
+  return withRequestDeadline(50000, req.signal, () => get(req), await identify(req));
+}
+
+async function get(req: NextRequest) {
   const limited = await limitRoute(req, "files");
   if (limited) return limited;
   try {
+    await noteResource("file", "datasheet:" + (req.nextUrl.searchParams.get("url") || ""));
+  } catch (e) {
+    return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
+  }
+  try {
     let url = new URL(req.nextUrl.searchParams.get("url") || "");
-    const signal = AbortSignal.timeout(25000);
+    const signal = fetchSignal(25000);
     for (let i = 0; i < 5; i++) {
       if (!allowed(url))
         return new Response(
