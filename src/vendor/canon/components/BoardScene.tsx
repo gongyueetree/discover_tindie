@@ -19,6 +19,8 @@ export type BodyEnvelope = {
   height: number;
   rotation: number;
   bottom: boolean;
+  /** Tindie: a source model the caller can build (bodyModel); the envelope stands in until it arrives. */
+  model?: unknown;
 };
 const EMPTY_BODIES: BodyEnvelope[] = [];
 const EMPTY_ASSETS: InputAsset[] = [];
@@ -28,12 +30,15 @@ export function BoardScene({
   components = true,
   active = true,
   fallbackBodies = EMPTY_BODIES,
+  bodyModel,
 }: {
   pcb: PcbIr;
   assets?: InputAsset[];
   components?: boolean;
   active?: boolean;
   fallbackBodies?: BodyEnvelope[];
+  /** Tindie: builds a body's model (origin at its centre, z = 0 on the board); null keeps the envelope. */
+  bodyModel?: (body: BodyEnvelope, three: typeof import("three")) => Promise<import("three").Object3D | null>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const reset = useRef(() => {});
@@ -339,6 +344,33 @@ export function BoardScene({
             : `Component models: ${result.loaded}/${result.total} placements loaded`,
         );
         setMissing(result.failures);
+        const withModels = bodyModel ? fallbackBodies.filter((b) => b.model) : [];
+        if (withModels.length) {
+          setModelStatus(`Loading ${withModels.length} component models from the source library…`);
+          let placed = 0,
+            next = 0;
+          const worker = async () => {
+            while (next < withModels.length && !cancelled) {
+              const b = withModels[next++];
+              const object = await bodyModel!(b, THREE).catch(() => null);
+              if (cancelled || !object) continue;
+              object.position.set(b.x, -b.y, b.bottom ? 0 : thickness);
+              if (b.bottom) object.rotation.x = Math.PI;
+              const envelope = envelopes.get(b.reference);
+              if (envelope) group.remove(envelope);
+              envelopes.delete(b.reference);
+              group.add(object);
+              placed++;
+            }
+          };
+          await Promise.all(Array.from({ length: 6 }, worker));
+          if (cancelled) return;
+          setModelStatus(
+            placed === withModels.length
+              ? `Component models: ${placed}/${withModels.length} loaded from the source library (EasyEDA).`
+              : `Component models: ${placed}/${withModels.length} loaded from the source library (EasyEDA); the others are approximate envelopes (heights estimated).`,
+          );
+        }
       } else setModelStatus("Board and pads ready");
     }
     draw().catch((e) => {
@@ -356,7 +388,7 @@ export function BoardScene({
       abort.abort();
       cleanup();
     };
-  }, [pcb, assets, components, animate, fallbackBodies]);
+  }, [pcb, assets, components, animate, fallbackBodies, bodyModel]);
   return (
     <div>
       <div

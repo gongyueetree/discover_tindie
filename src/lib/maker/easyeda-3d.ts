@@ -110,7 +110,12 @@ export function easyEdaBodies(pcb: PcbIr, assets: readonly InputAsset[] = []): B
         if (xs.length < 2) continue;
         const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
         if (x1 - x0 <= 0 || y1 - y0 <= 0) continue;
+        const uuid = String(node.attrs.uuid || "");
+        const rot = String(node.attrs.c_rotation || "0,0,0").split(",").map((v) => Number(v) || 0);
         bodies.push({
+          ...(/^[0-9a-f]{32}$/.test(uuid)
+            ? { model: { uuid, rotation: [rot[0] ?? 0, rot[1] ?? 0, rot[2] ?? 0] as [number, number, number], z: (Number(node.attrs.z) || 0) * MM } }
+            : {}),
           reference: footprint?.reference || String(node.attrs.title || "part"),
           x: ((x0 + x1) / 2) * MM,
           y: ((y0 + y1) / 2) * MM,
@@ -124,4 +129,139 @@ export function easyEdaBodies(pcb: PcbIr, assets: readonly InputAsset[] = []): B
     }
   }
   return bodies;
+}
+
+/* ------------------------------------------------------------------ EasyEDA 3D models */
+
+export type EasyEdaModelRef = { uuid: string; rotation: [number, number, number]; z: number };
+type ObjMesh = { color: [number, number, number]; opacity: number; positions: number[] };
+
+/** EasyEDA's OBJ: materials inline (newmtl … Kd … d … endmtl), then v lines, then usemtl + f groups. Units mm. */
+export function parseEasyEdaObj(text: string): ObjMesh[] {
+  const materials = new Map<string, { color: [number, number, number]; opacity: number }>();
+  let current: string | null = null;
+  const vertices: number[][] = [];
+  const meshes = new Map<string, ObjMesh>();
+  let mesh: ObjMesh | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [tag, ...rest] = line.split(/\s+/);
+    if (tag === "newmtl") {
+      current = rest[0] ?? "";
+      materials.set(current, { color: [0.6, 0.6, 0.6], opacity: 1 });
+    } else if (tag === "Kd" && current !== null) {
+      const c = rest.slice(0, 3).map(Number);
+      if (c.every(Number.isFinite)) materials.get(current)!.color = c as [number, number, number];
+    } else if (tag === "d" && current !== null) {
+      // EasyEDA writes transparency here (0 = opaque).
+      const d = Number(rest[0]);
+      if (Number.isFinite(d)) materials.get(current)!.opacity = Math.max(0.15, 1 - Math.min(1, Math.max(0, d)));
+    } else if (tag === "endmtl") current = null;
+    else if (tag === "v") {
+      const v = rest.slice(0, 3).map(Number);
+      if (v.length === 3 && v.every(Number.isFinite)) vertices.push(v);
+    } else if (tag === "usemtl") {
+      const name = rest[0] ?? "";
+      const m = materials.get(name) ?? { color: [0.6, 0.6, 0.6] as [number, number, number], opacity: 1 };
+      mesh = meshes.get(name) ?? { ...m, positions: [] };
+      meshes.set(name, mesh);
+    } else if (tag === "f") {
+      if (!mesh) {
+        mesh = { color: [0.6, 0.6, 0.6], opacity: 1, positions: [] };
+        meshes.set("", mesh);
+      }
+      const idx = rest.map((t) => {
+        const n = parseInt(t.split("/")[0], 10);
+        return n < 0 ? vertices.length + n : n - 1;
+      });
+      if (idx.some((i) => !(i >= 0 && i < vertices.length))) continue;
+      for (let k = 1; k + 1 < idx.length; k++) for (const i of [idx[0], idx[k], idx[k + 1]]) mesh.positions.push(...vertices[i]);
+    }
+  }
+  return [...meshes.values()].filter((m) => m.positions.length >= 9);
+}
+
+const objCache = new Map<string, Promise<ObjMesh[] | null>>();
+function fetchObj(uuid: string) {
+  let p = objCache.get(uuid);
+  if (!p) {
+    p = fetch(`/api/maker/easyeda-model/${uuid}`)
+      .then((r) => (r.ok ? r.text() : null))
+      .then((t) => (t ? parseEasyEdaObj(t) : null))
+      .catch(() => null);
+    objCache.set(uuid, p);
+  }
+  return p;
+}
+
+/** XY extent of points after rotating about Z by `deg`. */
+function extentAfter(positions: number[], deg: number) {
+  const c = Math.cos((deg * Math.PI) / 180),
+    s = Math.sin((deg * Math.PI) / 180);
+  let x0 = Infinity,
+    x1 = -Infinity,
+    y0 = Infinity,
+    y1 = -Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i] * c - positions[i + 1] * s,
+      y = positions[i] * s + positions[i + 1] * c;
+    x0 = Math.min(x0, x);
+    x1 = Math.max(x1, x);
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+  }
+  return [x1 - x0, y1 - y0];
+}
+
+/**
+ * A body's EasyEDA model as a three.js group in board millimetres, origin at the outline centre and
+ * z = 0 on the board surface (BoardScene places and flips it). null when the model is unavailable or
+ * does not fit the part's outline (then the envelope stays): EasyEDA's own placement rules (centre on
+ * the 3D outline, bottom on the board plus the `z` offset, c_rotation) as easyeda2kicad applies them.
+ */
+export async function easyEdaModelObject(envelope: BodyEnvelope, THREE: typeof import("three")): Promise<import("three").Object3D | null> {
+  const body = envelope as BodyEnvelope & { model?: EasyEdaModelRef };
+  if (!body.model || typeof body.model !== "object") return null;
+  const model = body.model;
+  const meshes = await fetchObj(model.uuid);
+  if (!meshes?.length) return null;
+  const all = meshes.flatMap((m) => m.positions);
+  // X / Y tilts first (rare), then the Z turn that makes the model's footprint match the outline.
+  const [rx, ry, rz] = model.rotation;
+  const tilt = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler((rx * Math.PI) / 180, (ry * Math.PI) / 180, 0, "XYZ"));
+  const tilted = new Float32Array(all);
+  new THREE.BufferAttribute(tilted, 3).applyMatrix4(tilt);
+  const target = [body.w, body.h];
+  const fit = (deg: number) => {
+    const [w, h] = extentAfter(Array.from(tilted), deg);
+    return Math.abs(w - target[0]) + Math.abs(h - target[1]);
+  };
+  const turn = [rz, -rz].reduce((best, d) => (fit(d) < fit(best) - 1e-6 ? d : best), rz);
+  const [w, h] = extentAfter(Array.from(tilted), turn);
+  // Wrong units or a different part: keep the envelope rather than show a misleading model.
+  if (!(w > 0 && h > 0) || w / body.w > 3 || body.w / w > 3 || h / body.h > 3 || body.h / h > 3) return null;
+  const matrix = new THREE.Matrix4().makeRotationZ((turn * Math.PI) / 180).multiply(tilt);
+  const group = new THREE.Group();
+  const box = new THREE.Box3();
+  for (const m of meshes) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(m.positions, 3));
+    g.applyMatrix4(matrix);
+    g.computeVertexNormals();
+    g.computeBoundingBox();
+    box.union(g.boundingBox!);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(m.color[0], m.color[1], m.color[2]),
+      roughness: 0.6,
+      metalness: 0.1,
+      side: THREE.DoubleSide,
+      transparent: m.opacity < 1,
+      opacity: m.opacity,
+    });
+    group.add(new THREE.Mesh(g, material));
+  }
+  const centre = box.getCenter(new THREE.Vector3());
+  for (const child of group.children) (child as import("three").Mesh).geometry.translate(-centre.x, -centre.y, -box.min.z + model.z);
+  return group;
 }

@@ -347,6 +347,12 @@ export default function Circuits() {
   );
 }
 
+/** owner/repo and folder of a GitHub design kept in a folder of a repository (null otherwise). */
+function repoFolder(url: string | undefined) {
+  const m = (url || "").match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)\/tree\/[^/]+\/(.+?)\/?$/);
+  return m ? { repo: m[1], folder: decodeURIComponent(m[2]) } : null;
+}
+
 /** eelib CircuitAtlas DesignCard: picture (or "no preview"), name, facts, licence at the bottom. */
 function DesignCard({ d, onOpen, onUnusable }: { d: Design; onOpen: () => void; onUnusable: () => void }) {
   const [gone, setGone] = useState(false);
@@ -405,6 +411,14 @@ function DesignCard({ d, onOpen, onUnusable }: { d: Design; onOpen: () => void; 
               <Linkify text={d.summary} />
             </p>
           )}
+          {(() => {
+            const where = d.kind === "open_source" ? repoFolder(d.sourceUrl) : null;
+            return where ? (
+              <p className="atlas-card-where" title={`One board of the ${where.repo} repository, in ${where.folder}`}>
+                In {where.repo} · {where.folder}
+              </p>
+            ) : null;
+          })()}
         </div>
         <div className="atlas-card-facts">
           <span>
@@ -450,9 +464,12 @@ function CardPicture({ d, vendor = false }: { d: Design; vendor?: boolean }) {
   const repo = vendor ? null : d.sourceUrl?.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/|$)/)?.[1];
   const card = repo ? `https://opengraph.githubassets.com/1/${repo}` : null;
   // Vendor designs: the picture their own page publishes (looked up on the server).
+  // A board in a folder of a larger repository: the list's picture is the repository's, so ask the
+  // server for one named after the board first (it falls back to the repository's).
+  const inFolder = !vendor && !!repoFolder(d.sourceUrl);
   const [sources, setSources] = useState<string[] | null>(
     // No picture in the list → ask the server (README picture, then the PCB preview).
-    vendor || !d.coverImageUrl ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
+    vendor || inFolder || !d.coverImageUrl ? null : [d.coverImageUrl, board].filter((v): v is string => !!v),
   );
   const [index, setIndex] = useState(0);
   // Whether the server has been asked yet; asked again when every picture from the list fails to load.

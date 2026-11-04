@@ -18,7 +18,7 @@ import type { CanonicalIrBundle, IrPoint, PartIr, PcbIr } from "../lib/eda/types
 import { hierarchicalPort, globalPort } from "../lib/eda/port-geometry";
 import { arcPoints } from "../lib/eda/view-geometry";
 import { AssemblyScene } from "./AssemblyScene";
-import { easyEdaBodies, isEasyEdaStandard, pcbInMm } from "@/lib/maker/easyeda-3d";
+import { easyEdaBodies, easyEdaModelObject, isEasyEdaStandard, pcbInMm } from "@/lib/maker/easyeda-3d";
 import { modelAssets,boardAssembly } from "../lib/models/assets";
 import type {InputAsset} from "../lib/eda/types";
 import { BoardScene } from "./BoardScene";
@@ -457,7 +457,7 @@ export function Board3DViewer({ bundle,assets=[],active=true }: { bundle: Canoni
   if(!pcb)return <EmptyViewer kind="3D PCB" format={bundle.project.sourceFormat}/>;
   const models=modelAssets(assets),assembly=boardAssembly(pcb,models);
   const selected=choice==="auto"?undefined:models.find(a=>a.path===choice);
-  return <article className="panel board-3d-panel"><div className="viewer-toolbar"><strong>PCB 3D · {pcb.name}</strong><select aria-label="Choose 3D board" value={index} onChange={e=>{setIndex(Number(e.target.value));setChoice("auto");}}>{bundle.pcbs.map((p,i)=><option key={p.id} value={i}>{p.name}</option>)}</select><select aria-label="Choose model" value={choice} onChange={e=>setChoice(e.target.value)}><option value="auto">PCB + source silkscreen + component models</option><option value="ir">Board and pads only</option>{models.map(a=><option key={a.path} value={a.path}>Model: {a.path}</option>)}</select></div>{selected?<AssemblyScene key={selected.path} asset={selected} active={active}/>:<BoardScene key={`${pcb.id}-${choice}`} pcb={easy?.pcb??pcb} assets={assets} components={choice!=="ir"} active={active} fallbackBodies={choice!=="ir"?easy?.bodies:undefined}/>}<div className="viewer-status">{selected?"Shows source solids and colours. Verify assembly model revision against the board.":"Loads included models. Unavailable models are listed; a board-only view is not a complete component assembly."}</div></article>;
+  return <article className="panel board-3d-panel"><div className="viewer-toolbar"><strong>PCB 3D · {pcb.name}</strong><select aria-label="Choose 3D board" value={index} onChange={e=>{setIndex(Number(e.target.value));setChoice("auto");}}>{bundle.pcbs.map((p,i)=><option key={p.id} value={i}>{p.name}</option>)}</select><select aria-label="Choose model" value={choice} onChange={e=>setChoice(e.target.value)}><option value="auto">PCB + source silkscreen + component models</option><option value="ir">Board and pads only</option>{models.map(a=><option key={a.path} value={a.path}>Model: {a.path}</option>)}</select></div>{selected?<AssemblyScene key={selected.path} asset={selected} active={active}/>:<BoardScene key={`${pcb.id}-${choice}`} pcb={easy?.pcb??pcb} assets={assets} components={choice!=="ir"} active={active} fallbackBodies={choice!=="ir"?easy?.bodies:undefined} bodyModel={easy?easyEdaModelObject:undefined}/>}<div className="viewer-status">{selected?"Shows source solids and colours. Verify assembly model revision against the board.":"Loads included models. Unavailable models are listed; a board-only view is not a complete component assembly."}</div></article>;
 }
 
 type BomRow = {

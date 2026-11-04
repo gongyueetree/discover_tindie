@@ -38,3 +38,14 @@ assert.equal(b.height, 0.8);
 assert.equal(b.bottom, true);
 assert.deepEqual(easyEdaBodies(pcb, [{ path: "SCH.json", bytes: new TextEncoder().encode('{"head":{"docType":"1"},"shape":[]}') }]), []);
 console.log("easyeda 3d checks passed");
+
+// EasyEDA OBJ: inline materials, quads fanned into triangles, faces grouped by material.
+import { parseEasyEdaObj } from "../src/lib/maker/easyeda-3d";
+const obj = parseEasyEdaObj(
+  ["newmtl a", "Kd 0.1 0.2 0.3", "d 0", "endmtl", "newmtl b", "Kd 1 1 1", "d 0.5", "endmtl", "v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "v 0 0 1", "usemtl a", "f 1/1/1 2/2/2 3/3/3 4/4/4", "usemtl b", "f 1 2 5", "f 1 2 99"].join("\n"),
+);
+assert.equal(obj.length, 2);
+assert.deepEqual(obj[0].color, [0.1, 0.2, 0.3]);
+assert.equal(obj[0].positions.length, 2 * 3 * 3, "a quad is two triangles");
+assert.equal(obj[1].opacity, 0.5);
+assert.equal(obj[1].positions.length, 9, "a face pointing past the vertex list is dropped");

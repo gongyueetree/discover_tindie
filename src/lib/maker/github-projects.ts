@@ -148,8 +148,28 @@ export function discoverProjects(
     .sort(
       (a, b) =>
         Number(!!b.recommended) - Number(!!a.recommended) ||
+        designRank(b) - designRank(a) ||
+        // The main design usually sits higher than sub-boards or overviews kept beside it.
+        a.directory.split("/").length - b.directory.split("/").length ||
         a.id.localeCompare(b.id),
     );
+}
+
+/** Folders that hold documentation or manufacturing output, not the design itself. */
+const OUTPUT_DIR = /(^|\/)(docs?|gen|generated|outputs?|exports?|fab|fabrication|production|manufactur\w*|gerbers?|cam|plots?|backups?|old|archive|obsolete)(\/|$)/i;
+/**
+ * Which project to offer first when a repository holds several: the design (schematic and board,
+ * KiCad project first) over a stray board file in a documentation or output folder (a `.brd` there
+ * is often another tool's export, not an EAGLE board).
+ */
+export function designRank(p: GithubProject) {
+  let score = 0;
+  if (p.roots.some((r) => /\.kicad_pro$/i.test(r))) score += 4;
+  if (p.roots.some((r) => /\.(kicad_sch|sch|SchDoc|esch)$/i.test(r))) score += 2;
+  if (p.roots.some((r) => /\.(kicad_pcb|brd|PcbDoc|epcb)$/i.test(r))) score += 2;
+  if (/^eagle$/i.test(p.format) && p.roots.every((r) => /\.brd$/i.test(r))) score -= 2;
+  if (OUTPUT_DIR.test(p.directory)) score -= 6;
+  return score;
 }
 export function resolveRepoPath(parent: string, relative: string) {
   if (/^(?:[a-z]+:|\/|\\)/i.test(relative)) return null;
