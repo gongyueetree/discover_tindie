@@ -332,7 +332,9 @@ export function BoardScene({
           if (envelope) group.remove(envelope);
         }
         setModelStatus(
-          result.total === 0
+          result.total === 0 && fallbackBodies.length
+            ? `Component bodies: ${fallbackBodies.length} approximate envelopes from the source's 3D outlines (position and footprint from the file, heights estimated). The source's 3D models are not part of the project files.`
+            : result.total === 0
             ? `Board geometry ready. No component model references in this file.${pcb.sourceRefs.some((r) => /\.pcbdoc$/i.test(r.path)) ? "Reimport the source project to load embedded models." : ""}`
             : `Component models: ${result.loaded}/${result.total} placements loaded`,
         );
