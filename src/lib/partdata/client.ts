@@ -255,3 +255,35 @@ export function pdGetRaw(
   value.catch(() => raws.delete(path));
   return value;
 }
+
+/**
+ * Signed GET of a large file (an ezPLM STEP model) passed through as a stream with a byte cap,
+ * never held whole in memory. Not cached here (the browser / CDN cache the response).
+ */
+export async function pdGetStream(path: string, max: number): Promise<{ type: string; stream: ReadableStream<Uint8Array> }> {
+  if (!partdataConfigured()) throw new PartdataError("The parts database is not connected.", 503, "unconfigured");
+  const ts = Math.floor(Date.now() / 1000).toString();
+  const nonce = randomBytes(12).toString("hex");
+  let r: Response;
+  try {
+    r = await fetch(BASE() + path, {
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(45000),
+      headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
+    });
+  } catch {
+    throw new PartdataError("The parts database is unreachable right now.", 502, "unreachable", true);
+  }
+  if (!r.ok) {
+    await r.body?.cancel().catch(() => undefined);
+    throw new PartdataError(r.status === 404 ? "Not found." : `HTTP ${r.status}`, r.status === 404 ? 404 : 502);
+  }
+  if (Number(r.headers.get("content-length") || 0) > max) {
+    await r.body?.cancel().catch(() => undefined);
+    throw new PartdataError("File too large.", 502);
+  }
+  const { peekStream } = await import("@/lib/maker/stream-body");
+  const { stream } = await peekStream(r.body, 0, max);
+  return { type: r.headers.get("content-type") || "application/octet-stream", stream };
+}

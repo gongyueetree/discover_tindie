@@ -2,10 +2,9 @@ import { translateTexts, englishParts } from "@/lib/maker/translation";
 import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable, githubFolderImage } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
-import { reserveTranslation } from "@/lib/maker/limits";
-import { chunkStream } from "@/lib/maker/stream-body";
+import { chunkStream, peekStream } from "@/lib/maker/stream-body";
 import { matchRow } from "@/lib/maker/bom";
-import { visitorHash, pdGetRaw, oneVisitorCharge } from "@/lib/partdata/client";
+import { visitorHash, pdGetRaw, pdGetStream, oneVisitorCharge } from "@/lib/partdata/client";
 import { cadPreview, ezplmFile } from "@/lib/partdata/kicad-lib";
 import {
   partDetail,
@@ -55,6 +54,8 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
   const ip = clientIp(req);
   const visitor = visitorHash(ip);
   const [head, a] = path;
+  // One deadline for the whole request (maxDuration is 60 s): every upstream step works within it.
+  const deadline = Date.now() + 50_000;
   let result: any;
   try {
     await rateLimit(ip);
@@ -69,7 +70,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
         body.texts.some((s: unknown) => typeof s !== "string" || s.length > 500)
       )
         throw new SourceError("Invalid translation text list.", 400);
-      result = { texts: await translateTexts(body.texts, (chars) => reserveTranslation(visitor, chars)) };
+      result = { texts: await translateTexts(body.texts, visitor) };
     } else if (req.method === "POST" && head === "github" && path.length === 2) {
       const body = await jsonBody(req, 5000);
       if (a === "scan") {
@@ -93,9 +94,9 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       /* ------------------------------------------------------------- components */
       const query = (q.get("q") || "").trim();
       if (query.length < 2 || query.length > 120) throw new SourceError("Enter 2–120 characters.", 400);
-      result = await search(query, visitor);
+      result = await search(query, visitor, false, { deadline });
     } else if (req.method === "GET" && head === "parts" && path.length === 2 && PART_ID.test(a)) {
-      const [part] = await englishParts([await partDetail(a, visitor)]);
+      const [part] = await englishParts([await partDetail(a, visitor)], visitor);
       result = { part };
     } else if (req.method === "GET" && head === "cad" && path.length === 2 && PART_ID.test(a)) {
       // CAD drawn by eelib's preview engine from the official KiCad library entry partdata names.
@@ -107,7 +108,11 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       const kind = path[2] as "symbol" | "footprint" | "model";
       const part = await partDetail(a, visitor);
       if (!part.ezplmLibrary?.[kind]) throw new SourceError("ezPLM's library has no such file for this part.", 404);
-      const file = await ezplmFile(a, kind);
+      // Models (up to 15 MB) stream through with a byte cap; symbols and footprints are small text.
+      const file =
+        kind === "model"
+          ? { body: (await pdGetStream(`/api/pub/v1/parts/${a}/cad/model`, 15 * 1024 * 1024)).stream }
+          : await ezplmFile(a, kind);
       const name = ((kind === "symbol" ? part.symbolName : part.footprintName) || part.mpn).split(":").pop()!.replace(/[^\w.+-]/g, "_").slice(0, 80);
       const ext = { symbol: "kicad_sym", footprint: "kicad_mod", model: "step" }[kind];
       return new Response(file.body as BodyInit, {
@@ -130,7 +135,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "pricing" && path.length === 2) {
       /* ------------------------------------------------- distributor quotes (optional) */
       const mpn = decodeURIComponent(a).slice(0, 120);
-      const direct = await search(mpn, visitor, true, { partdata: false });
+      const direct = await search(mpn, visitor, true, { partdata: false, deadline });
       const identity = (s: string) =>
         s
           .toUpperCase()
@@ -227,9 +232,17 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
         throw new SourceError("EasyEDA's model server is unreachable.", 502);
       }
       if (!r.ok) throw new SourceError(r.status === 404 ? "EasyEDA has no such model." : "EasyEDA's model server failed.", r.status === 404 ? 404 : 502);
-      const text = await r.text();
-      if (text.length > 20 * 1024 * 1024 || !/^\s*(v|newmtl|#|o|g)\s/m.test(text)) throw new SourceError("Unexpected model data from EasyEDA.", 502);
-      return new Response(text, {
+      // Streamed through with a 20 MB cap; the first KB must look like an OBJ model.
+      if (Number(r.headers.get("content-length") || 0) > 20 * 1024 * 1024) {
+        await r.body?.cancel().catch(() => undefined);
+        throw new SourceError("EasyEDA's model is too large.", 502);
+      }
+      const obj = await peekStream(r.body, 1024, 20 * 1024 * 1024).catch(() => null);
+      if (!obj || !/^\s*(v|newmtl|#|o|g)\s/m.test(new TextDecoder().decode(obj.head))) {
+        await obj?.cancel();
+        throw new SourceError("Unexpected model data from EasyEDA.", 502);
+      }
+      return new Response(obj.stream, {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
@@ -244,7 +257,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
     } else if (req.method === "GET" && head === "planner-parts" && path.length === 1) {
       const query = (q.get("q") || "").trim();
       if (query.length < 2 || query.length > 120) throw new SourceError("Enter 2–120 characters.", 400);
-      const [items] = [await englishParts(await plannerParts(query, visitor))];
+      const [items] = [await englishParts(await plannerParts(query, visitor), visitor)];
       result = { items };
     } else if (req.method === "GET" && head === "families" && path.length === 1) {
       /* -------------------------------------------------------- knowledge graph */
@@ -275,7 +288,7 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
           throw new SourceError("Invalid BOM row.", 400);
         return { ...row, reference: String(row.reference || row.id).slice(0, 300), original: {}, status: "unmatched" };
       });
-      result = { rows: await matchBomRows(rows, visitor) };
+      result = { rows: await matchBomRows(rows, visitor, deadline) };
     } else throw new SourceError("Not found", 404);
 
     const res = NextResponse.json(result);
@@ -306,7 +319,7 @@ function keyword(row: BomRow) {
  * search only for rows partdata could not identify. partdata never guesses: "ambiguous" and
  * "candidates" stay in review until the visitor confirms one.
  */
-async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> {
+async function matchBomRows(rows: BomRow[], visitor: string, deadline: number): Promise<BomRow[]> {
   const sources = [{ source: "Tindie parts database", status: "ready" as const }];
   let lines: Awaited<ReturnType<typeof matchLines>> = [];
   let partdataError = "";
@@ -326,9 +339,9 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
     }
   const byRef = new Map(lines.map((l) => [l.ref, l]));
   const out: BomRow[] = [];
-  // Distributor fallback: each distinct keyword once per request, within a time budget for the whole batch.
+  // Distributor fallback: each distinct keyword once per request, within the request's deadline
+  // (counted from when the request arrived, so a slow parts-database answer leaves less room).
   const lookups = new Map<string, ReturnType<typeof search>>();
-  const deadline = Date.now() + 35_000;
   for (const row of rows) {
     const line = byRef.get(row.id);
     const st = partdataError
@@ -369,13 +382,13 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
       out.push({ ...row, status: "unmatched", reason: "Daily lookup limit reached — try again tomorrow, or enter the part by hand.", sources: st });
       continue;
     }
-    if (Date.now() > deadline && !lookups.has(kw.toUpperCase())) {
+    if (deadline - Date.now() < 8_000 && !lookups.has(kw.toUpperCase())) {
       out.push({ ...row, status: "unmatched", reason: "Distributor lookup skipped to keep this batch fast — retry this row.", sources: st });
       continue;
     }
     try {
       let pending = lookups.get(kw.toUpperCase());
-      if (!pending) lookups.set(kw.toUpperCase(), (pending = search(kw, visitor, true, { partdata: false })));
+      if (!pending) lookups.set(kw.toUpperCase(), (pending = search(kw, visitor, true, { partdata: false, deadline })));
       const s = await pending;
       const others = s.items.filter((p) => p.source !== "Tindie parts database");
       out.push({ ...matchRow(row, others), sources: [...st, ...s.sources.filter((x) => x.source !== "Tindie parts database")] });

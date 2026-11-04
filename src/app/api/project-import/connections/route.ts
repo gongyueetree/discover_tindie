@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import { CONNECTION_COOKIE, decodeConnections, encodeConnections } from "@/lib/project-import/connection-cookie";
 import { getGithubInstallationConnection, isGithubAppConfigured } from "@/lib/project-import/github-app";
@@ -6,6 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   const stored = decodeConnections(request.cookies.get(CONNECTION_COOKIE)?.value);
   const validated = [];
 
@@ -32,7 +35,7 @@ export async function GET(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 90,
+      maxAge: 60 * 60 * 24 * 30,
     });
   }
 

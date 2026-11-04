@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import {
   CONNECTION_COOKIE,
@@ -11,6 +12,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   const target = new URL("/seller/import-project", request.url);
   if (!isGithubAppConfigured()) {
     target.searchParams.set("github", "not-configured");
@@ -47,7 +50,7 @@ export async function GET(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 90,
+      maxAge: 60 * 60 * 24 * 30,
     });
     response.cookies.set(CONNECTION_STATE_COOKIE, "", {
       httpOnly: true,

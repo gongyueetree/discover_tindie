@@ -2,17 +2,20 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { hasChinese, terminology } from "./english";
 import type { Part } from "./types";
+import { reserveTranslation } from "./limits";
 const cache = new Map<string, string>();
-/** Optional standard Azure Translator v3 (NMT), never a generative/LLM endpoint. */
-export async function translateTexts(texts: string[], reserve?: (chars: number) => Promise<boolean>): Promise<string[]> {
+/**
+ * Optional standard Azure Translator v3 (NMT), never a generative/LLM endpoint. The only place that
+ * calls Azure: every batch reserves the characters it actually sends (masked text) from the daily
+ * budget first — the visitor's when `visitorKey` is given, otherwise the server's own share of the
+ * site budget. Over budget (or without a working ledger) the glossary translation is used instead.
+ */
+export async function translateTexts(texts: string[], visitorKey: string | null = null, deadline = Date.now() + 20_000): Promise<string[]> {
   const unique = [...new Set(texts.filter(hasChinese))];
   const pending = unique.filter(
     (t) => !cache.has(t) && hasChinese(terminology(t)),
   );
-  // Paid characters are reserved first; over budget, the glossary translation below is used instead.
-  const allowed =
-    !!process.env.AZURE_TRANSLATOR_KEY && pending.length > 0 && (!reserve || (await reserve(pending.reduce((n, t) => n + t.length, 0))));
-  if (allowed) {
+  if (process.env.AZURE_TRANSLATOR_KEY && pending.length) {
     for (let i = 0; i < pending.length; i += 40) {
       const batch = pending.slice(i, i + 40);
       try {
@@ -31,6 +34,10 @@ export async function translateTexts(texts: string[], reserve?: (chars: number) 
           masks.push(protectedTerms);
           return { Text: masked };
         });
+        // Not enough time left in this request: keep the glossary translation.
+        if (deadline - Date.now() < 3_000) break;
+        // Azure bills the characters submitted: reserve exactly those, before sending.
+        if (!(await reserveTranslation(visitorKey, body.reduce((n, b) => n + b.Text.length, 0)))) break;
         const r = await fetch(
           "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&from=zh-Hans&to=en",
           {
@@ -46,7 +53,7 @@ export async function translateTexts(texts: string[], reserve?: (chars: number) 
                 : {}),
             },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(Math.max(1_000, Math.min(15_000, deadline - Date.now() - 1_000))),
             cache: "no-store",
           },
         );
@@ -73,12 +80,12 @@ export async function translateTexts(texts: string[], reserve?: (chars: number) 
   }
   return texts.map((t) => cache.get(t) || terminology(t));
 }
-export async function englishParts(parts: Part[]) {
+export async function englishParts(parts: Part[], visitorKey: string | null = null, deadline?: number) {
   const strings = parts.flatMap((p) => [
     p.description,
     ...Object.entries(p.parameters).flat(),
   ]);
-  const translated = await translateTexts(strings);
+  const translated = await translateTexts(strings, visitorKey, deadline);
   let offset = 0;
   return parts.map((p) => {
     const description = translated[offset++];

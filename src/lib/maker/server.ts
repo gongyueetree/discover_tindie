@@ -45,7 +45,7 @@ export async function search(
   q: string,
   visitor: string,
   includeSuppliers = false,
-  { partdata = true }: { partdata?: boolean } = {},
+  { partdata = true, deadline = Date.now() + 45_000 }: { partdata?: boolean; /** epoch ms the whole request must finish by */ deadline?: number } = {},
 ) {
   const parts: Part[] = [];
   const statuses: ProviderStatus[] = [];
@@ -69,8 +69,8 @@ export async function search(
   }
   if (!catalogueExact || includeSuppliers)
     await Promise.all([
-      supplierLookup("digikey", "DigiKey direct", q, visitor, statuses, parts, digikeyParts),
-      supplierLookup("mouser", "Mouser direct", q, visitor, statuses, parts, mouserParts),
+      supplierLookup("digikey", "DigiKey direct", q, visitor, statuses, parts, digikeyParts, deadline),
+      supplierLookup("mouser", "Mouser direct", q, visitor, statuses, parts, mouserParts, deadline),
     ]);
   const merged = new Map<string, Part>();
   for (const p of parts) {
@@ -81,7 +81,7 @@ export async function search(
     else merged.set(k, p);
   }
   return {
-    items: await englishParts(rankParts([...merged.values()], q)),
+    items: await englishParts(rankParts([...merged.values()], q), visitor, deadline),
     sources: statuses,
   };
 }
@@ -104,9 +104,16 @@ async function supplierLookup(
   statuses: ProviderStatus[],
   parts: Part[],
   load: (q: string) => Promise<Part[]>,
+  deadline: number,
 ) {
   if (!suppliersConnected()[provider]) {
     statuses.push({ source, status: "unconfigured" });
+    return;
+  }
+  // Leave time to rank, translate and answer: a lookup that cannot finish in time is not started.
+  const room = deadline - Date.now() - 4_000;
+  if (room < 3_000) {
+    statuses.push({ source, status: "error", message: "Skipped to keep this request fast — retry for live prices" });
     return;
   }
   const key = supplierCacheKey(provider, q);
@@ -114,7 +121,7 @@ async function supplierLookup(
     const { value } = await supplierCached(key, async () => {
       if (await supplierCoolingDown(provider)) throw new SupplierSkip(COOLDOWN_MSG[provider]);
       if (!(await reserveSupplierCall(provider, visitor))) throw new SupplierSkip("Live distributor lookups are paused for today (usage limit reached)");
-      return load(q);
+      return withTimeout(load(q), Math.min(room, 30_000));
     });
     parts.push(...value.map((p) => ({ ...p, offers: p.offers.map((o) => ({ ...o })) })));
     statuses.push({ source, status: "ready" });
@@ -136,6 +143,11 @@ async function supplierLookup(
   }
 }
 class SupplierSkip extends Error {}
+/** The answer, or a timeout error once `ms` have passed (the request does not wait any longer). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout>;
+  return Promise.race([p, new Promise<T>((_, reject) => (t = setTimeout(() => reject(new Error("timeout")), ms)))]).finally(() => clearTimeout(t));
+}
 
 async function digikeyParts(q: string): Promise<Part[]> {
   return (await keywordSearch(q, 8)).map((p) => ({

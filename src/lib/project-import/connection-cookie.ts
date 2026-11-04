@@ -7,7 +7,11 @@ export const CONNECTION_STATE_COOKIE = "tindie_project_connection_state";
 interface ConnectionCookiePayload {
   version: 1;
   github: GithubConnection[];
+  /** Server-checked expiry (epoch ms): the browser's cookie lifetime is not an authorisation limit. */
+  exp?: number;
 }
+/** A connection must be re-authorised after this long, whatever the browser keeps. */
+export const CONNECTION_TTL_MS = 30 * 24 * 3600 * 1000;
 
 function secret() {
   return (
@@ -25,7 +29,7 @@ function signature(payload: string) {
 }
 
 export function encodeConnections(github: GithubConnection[]) {
-  const payload: ConnectionCookiePayload = { version: 1, github };
+  const payload: ConnectionCookiePayload = { version: 1, github, exp: Date.now() + CONNECTION_TTL_MS };
   const raw = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = signature(raw);
   // Without a signing secret no connection can be stored (an unsigned cookie would be forgeable).
@@ -50,6 +54,8 @@ export function decodeConnections(value: string | undefined | null): GithubConne
     }
     const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as ConnectionCookiePayload;
     if (parsed.version !== 1 || !Array.isArray(parsed.github)) return [];
+    // No expiry (issued before expiries existed) or past it: re-authorise.
+    if (typeof parsed.exp !== "number" || parsed.exp < Date.now()) return [];
     return parsed.github.filter((item) => Number.isFinite(item.installationId));
   } catch {
     return [];

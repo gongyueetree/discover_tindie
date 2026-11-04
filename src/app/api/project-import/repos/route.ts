@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import { CONNECTION_COOKIE, decodeConnections } from "@/lib/project-import/connection-cookie";
 import { listGithubInstallationRepositories } from "@/lib/project-import/github-app";
@@ -7,6 +8,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   const search = request.nextUrl.searchParams.get("q")?.trim() || "";
   const rawInstallationId = request.nextUrl.searchParams.get("installationId")?.trim() || "";
 
