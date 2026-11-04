@@ -1138,12 +1138,14 @@ export function calculatePhysicalDimensions(
     if (center && start && Number.isFinite(angle)) registerArcExtrema(center, start, angle);
   }
   if (points.length === 0) return undefined;
-  const xs = points.map((value) => value.x);
-  const ys = points.map((value) => value.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
+  // A loop, not Math.min(...xs): a large board has more points than a call can take as arguments.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const value of points) {
+    if (value.x < minX) minX = value.x;
+    if (value.x > maxX) maxX = value.x;
+    if (value.y < minY) minY = value.y;
+    if (value.y > maxY) maxY = value.y;
+  }
   const outlineClosed =
     hasClosedPrimitive ||
     (endpointCounts.size > 0 && Array.from(endpointCounts.values()).every((count) => count >= 2 && count % 2 === 0));
