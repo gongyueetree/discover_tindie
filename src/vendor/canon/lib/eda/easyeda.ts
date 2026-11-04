@@ -224,12 +224,20 @@ function parseStandardSchematic(
       const partId = existingPart?.id ?? stableId("part", schematicId, sheetId, reference);
       const symbolUnitId = stableId("symbol-unit", partId, 1);
       const fields: Record<string, string> = {};
-      for (const token of (main.fields[3] ?? "").split("`")) {
-        if (token.includes("=")) {
-          const separator = token.indexOf("=");
-          fields[token.slice(0, separator)] = token.slice(separator + 1);
+      const tokens = (main.fields[3] ?? "").split("`");
+      if (tokens.some((token) => token.includes("="))) {
+        for (const token of tokens) {
+          if (token.includes("=")) {
+            const separator = token.indexOf("=");
+            fields[token.slice(0, separator)] = token.slice(separator + 1);
+          }
         }
+      } else {
+        // Tindie: EasyEDA Standard writes c_para as alternating key`value`key`value (package`SOT-23`Manufacturer Part`…).
+        for (let index = 0; index + 1 < tokens.length; index += 2) if (tokens[index]) fields[tokens[index]] = tokens[index + 1];
       }
+      const mpnRaw = fields["Manufacturer Part"] || fields.MPN || undefined;
+      const manufacturerRaw = fields.Manufacturer || undefined;
       const part: PartIr = existingPart ?? {
         id: partId,
         logicalPartKey: reference,
@@ -238,6 +246,8 @@ function parseStandardSchematic(
         symbolUnits: [{ id: symbolUnitId, unit: 1, position: point(main.fields[1], main.fields[2]), rotation: main.fields[4] ?? "0" }],
         footprint: packageField(main.fields[3] ?? ""),
         fields,
+        ...(mpnRaw && mpnRaw !== "?" ? { mpnRaw } : {}),
+        ...(manufacturerRaw && manufacturerRaw !== "?" ? { manufacturerRaw } : {}),
         variantStatus: "fitted",
         pinPadMap: [],
         sourceRefs: [shapeRef],

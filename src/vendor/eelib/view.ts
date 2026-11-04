@@ -5,6 +5,8 @@ import { altiumPage, type AltiumPage } from "./altium-page";
 import { drawAltiumSchematic, type AltiumSheet } from "./altium-schematic";
 import { legacyProjectSchematics, legacySymbolLibraryText, legacyWireUuid } from "./kicad-legacy";
 import { drawEagleSchematic } from "./eagle-schematic";
+// Tindie: EasyEDA Standard schematics (eelib has no drawer for them).
+import { easyEdaSheets } from "@/lib/maker/easyeda-schematic";
 import { drawSchematic, sheetOutline, type SheetChild, type SheetDrawing, type SheetHit, type SheetInstance } from "./kicad-schematic";
 
 /**
@@ -134,6 +136,10 @@ export function drawSchematics(bundle: CanonicalIrBundle, inputs: readonly Input
   const paths = bundle.schematics.map((sheet) => sheet.sourceRefs[0]?.path).filter((path): path is string => !!path);
   if (bundle.project.sourceFormat === "eagle") return eagleSheets([...new Set(paths)], inputs);
   if (bundle.project.sourceFormat === "altium") return altiumSheets(bundle, inputs);
+  if (bundle.project.sourceFormat === "easyeda") {
+    const sheets = easyEdaSheets(inputs);
+    if (sheets.length) return sheets;
+  }
   let active = [...new Set(paths.filter((path) => path.endsWith(".kicad_sch")))];
   let assets = inputs;
   let nets: Map<string, string> | undefined;

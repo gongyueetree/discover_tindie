@@ -337,7 +337,7 @@ export default function Planner() {
               className="btn primary"
               onClick={() =>
                 download(
-                  new TextEncoder().encode(plannerPcb(doc)),
+                  new TextEncoder().encode(plannerPcb(doc, { onSheet: true })),
                   "prelayout.kicad_pcb",
                   "text/plain",
                 )

@@ -265,3 +265,10 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 
 用 KiCad 10.0.1（官方 kicad/kicad 镜像，命令行 + 图形界面）实测：导出文件能正常打开（含 ezPLM 自建库的旧格式封装），只提示「旧版本文件，保存时转换」。macOS 上「一直转」多半是 KiCad 首次启动向导或系统权限对话框藏在主窗口后面。
 导出时板子原点原来在 (0,0)，会压在 A4 图框左上角；现在整体平移到图纸中间（`shiftBoard` / `pageOffset`，整毫米，离图纸边至少 10 mm），封装内部坐标不动。
+
+## 15. 第八轮：3D 预览位置、EasyEDA 工程
+
+- **3D 预览跑到右下角**：上一轮为 KiCad 文件把板子平移到图纸中间，3D 预览用的是同一份导出，于是也被平移了。现在只有下载的 KiCad 文件居中（`plannerPcb(doc, { onSheet: true })`），页面内 3D 仍以板子原点取景。
+- **EasyEDA（标准版）原理图**：eelib 没有 EasyEDA 绘图器，之前只能画出方框。新增 `src/lib/maker/easyeda-schematic.ts`，直接按 EasyEDA JSON 的图元（元件图形、引脚名/号、导线、结点、网络标识/端口、分区框、文字、图框）输出与 KiCad/EAGLE 相同的绘图数据；多页工程导出（docType 5）每页一张。
+- **BOM 没有型号**：EasyEDA 元件属性是 key`value`key`value 交替写法，解析器只认 key=value，导致 Manufacturer / Manufacturer Part 全丢。已修正（`canon/lib/eda/easyeda.ts`），BOM 能显示 MPN。
+- **打开设计时选错文件夹**：同一目录下有多个工程（如 hardware/pcb 下的 distro-v2 和 distro-v3.1）时，以前直接取第一个；现在优先选与设计名称末尾（「sesame-robot - distro-v3.1」）同名的文件夹。
