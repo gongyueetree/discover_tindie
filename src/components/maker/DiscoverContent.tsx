@@ -11,11 +11,12 @@ function hasDatabaseConfig() {
  * same signed-in saves and recommendation banner as the live app. Without a database (local
  * preview) the repository's resource directory is shown and nothing else is invented.
  */
-export async function DiscoverContent() {
+export async function DiscoverContent({ open }: { open?: number } = {}) {
   let resources: any[] = SEED_RESOURCES.map((r, i) => ({ ...r, logo: SEED_LOGOS[r.slug] ?? null, id: i + 1, status: "active" })),
     discoveries: any[] = [],
     blogPosts: any[] = [],
     recommendation: any = null,
+    openDiscovery: any = null,
     savedIds: number[] = [],
     signedIn = false,
     unavailable = !hasDatabaseConfig();
@@ -32,6 +33,10 @@ export async function DiscoverContent() {
         q.getActiveRecommendation(),
         q.getRecentBlogPosts(12),
       ]);
+      if (open) {
+        const d = await q.getDiscovery(open).catch(() => null);
+        if (d?.status === "published") openDiscovery = d;
+      }
     } catch (e) {
       console.error("[discover] database unavailable", e instanceof Error ? e.message : e);
       unavailable = true;
@@ -56,6 +61,7 @@ export async function DiscoverContent() {
         blogPosts={blogPosts}
         chrome={false}
         designViewer={await canSeeTools()}
+        openDiscovery={openDiscovery}
       />
     </div>
   );

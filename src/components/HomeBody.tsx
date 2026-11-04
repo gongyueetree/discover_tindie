@@ -11,8 +11,8 @@ import { BlogSection } from "@/components/BlogSection";
 
 // Shared home content. `chrome` controls whether the Tindie header/footer render.
 // The /embed route passes chrome={false} so the page can be iframed into tindie.com cleanly.
-export function HomeBody({ resources, topDiscoveries, savedIds, signedIn, recommendation, blogPosts, chrome = true, designViewer = false }:
-  { resources: any[]; topDiscoveries: any[]; savedIds: number[]; signedIn: boolean; recommendation?: any; blogPosts?: any[]; chrome?: boolean; /** Offer "View design files" on discoveries (the Open hardware viewer is visible to this visitor). */ designViewer?: boolean }) {
+export function HomeBody({ resources, topDiscoveries, savedIds, signedIn, recommendation, blogPosts, chrome = true, designViewer = false, openDiscovery = null }:
+  { resources: any[]; topDiscoveries: any[]; savedIds: number[]; signedIn: boolean; recommendation?: any; blogPosts?: any[]; chrome?: boolean; /** Offer "View design files" on discoveries (the Open hardware viewer is visible to this visitor). */ designViewer?: boolean; /** Opened on arrival (Resources link from an Open hardware pick: /?d=<id>). */ openDiscovery?: any }) {
   const featured = (resources || []).filter((r: any) => r.isFeatured).slice(0, 6).map((r: any) => ({ id: r.id, name: r.name, tag: r.capLabel, category: r.category, url: r.url, logo: r.logo }));
   return (
     <>
@@ -47,7 +47,7 @@ export function HomeBody({ resources, topDiscoveries, savedIds, signedIn, recomm
               <Link href="/archive" style={{ fontSize: 13.5, fontWeight: 600, color: "#1aa0ab" }}>View all discoveries →</Link>
             </div>
             <p style={{ color: "#8a9499", fontSize: 14, marginBottom: 18 }}>Daily hardware picks: new products, tools, developer boards, and open-source projects.</p>
-            <DiscoveryGrid items={topDiscoveries as any} designViewer={designViewer} />
+            <DiscoveryGrid items={topDiscoveries as any} designViewer={designViewer} initialDetail={openDiscovery} />
           </section>
         </TrackedSection>
 

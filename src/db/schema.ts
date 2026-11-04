@@ -206,3 +206,26 @@ export const recommendations = pgTable("recommendations", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+
+// Open-source designs Claude recommends for the Open hardware tab (one row per repository / folder).
+// Facts (licence, dates, stars) come from GitHub; the intro and caveats are Claude's reading of the
+// article and README. `discoveryId` is the Resources article people can read for details.
+export const designPicks = pgTable("design_picks", {
+  id: serial("id").primaryKey(),
+  repoUrl: text("repo_url").notNull().unique(),          // https://github.com/owner/repo[/tree/ref/folder]
+  discoveryId: integer("discovery_id"),
+  title: text("title").notNull(),
+  intro: text("intro").notNull(),
+  highlights: jsonb("highlights").$type<string[]>().default([]),
+  caveat: text("caveat"),                                // maturity note, e.g. "Author says it has not been built yet"
+  license: text("license"),
+  edaTool: text("eda_tool"),
+  stars: integer("stars"),
+  repoCreatedAt: timestamp("repo_created_at"),
+  repoPushedAt: timestamp("repo_pushed_at"),
+  imageUrl: text("image_url"),
+  score: integer("score").default(0),
+  pickDate: varchar("pick_date", { length: 10 }).notNull(),
+  status: varchar("status", { length: 12 }).notNull().default("published"), // published | hidden | rejected
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});

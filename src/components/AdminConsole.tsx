@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PartdataStatus } from "@/components/PartdataStatus";
 import { useRouter } from "next/navigation";
 import { DAILY_TARGET, taxName, TAXONOMY } from "@/lib/taxonomy";
@@ -12,7 +12,7 @@ type Stats = { needsReview: number; scheduled: number; approvedToday: number; br
 export function AdminConsole({ inbox, published, resources, sources, submissions, stats, recommendations, analytics, contentStats }:
   { inbox: Disc[]; published: Disc[]; resources: Res[]; sources: Src[]; submissions: Sub[]; stats: Stats; recommendations?: any[]; analytics?: any[]; contentStats?: any }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"dash" | "inbox" | "dir" | "src" | "mod" | "rec">("dash");
+  const [tab, setTab] = useState<"dash" | "inbox" | "dir" | "src" | "picks" | "mod" | "rec">("dash");
   const [busy, setBusy] = useState(false);
 
   async function call(url: string, body: any) {
@@ -35,7 +35,7 @@ export function AdminConsole({ inbox, published, resources, sources, submissions
       {/* sidebar */}
       <aside style={{ width: 220, background: "#0f343f", color: "#cfe1e6", flex: "none", padding: "0" }}>
         <div style={{ padding: "18px 20px", fontWeight: 700, fontSize: 18, color: "#fff", borderBottom: "1px solid #1d5163" }}>tindie<span style={{ color: "#f2762e" }}>.</span> <span style={{ fontSize: 11, color: "#7fa0a9", fontWeight: 400 }}>Admin</span></div>
-        {[["dash", "📊 Dashboard"], ["inbox", `📥 Discovery Inbox (${inbox.length})`], ["dir", "📚 Resource Directory"], ["src", "🔗 Sources"], ["mod", `🛡️ Moderation (${submissions.length})`], ["rec", "📣 Recommendations"]].map(([k, label]) => (
+        {[["dash", "📊 Dashboard"], ["inbox", `📥 Discovery Inbox (${inbox.length})`], ["dir", "📚 Resource Directory"], ["src", "🔗 Sources"], ["picks", "🧩 Design Picks"], ["mod", `🛡️ Moderation (${submissions.length})`], ["rec", "📣 Recommendations"]].map(([k, label]) => (
           <div key={k} onClick={() => setTab(k as any)} style={{ padding: "11px 20px", fontSize: 13.5, cursor: "pointer", borderLeft: `3px solid ${tab === k ? "#f2762e" : "transparent"}`, background: tab === k ? "#16404d" : "transparent", color: tab === k ? "#fff" : "#cfe1e6" }}>{label}</div>
         ))}
         <div style={{ padding: "14px 20px", fontSize: 11, color: "#5f808a", marginTop: 20 }}>Connected to live database</div>
@@ -51,6 +51,7 @@ export function AdminConsole({ inbox, published, resources, sources, submissions
           {tab === "inbox" && <Inbox inbox={inbox} published={published} call={call} callJson={callJson} />}
           {tab === "dir" && <Directory resources={resources} call={call} />}
           {tab === "src" && <Sources sources={sources} call={call} />}
+          {tab === "picks" && <DesignPicksAdmin />}
           {tab === "mod" && <Moderation submissions={submissions} call={call} />}
           {tab === "rec" && <Recommendations recommendations={recommendations || []} call={call} />}
         </div>
@@ -412,6 +413,60 @@ function ResourceDrawer({ r, onClose, call }: { r: Res | null; onClose: () => vo
         <button style={{ ...btnPrimary, flex: 1 }} onClick={save}>{isNew ? "Create" : "Save"}</button>
       </div>
     </Drawer>
+  );
+}
+
+/** Open hardware → "Fresh open hardware": what the daily AI selection picked or turned down (last 30 days). */
+function DesignPicksAdmin() {
+  const [items, setItems] = useState<any[] | null>(null);
+  const [busy, setBusy] = useState("");
+  const [log, setLog] = useState<string[]>([]);
+  const load = () => fetch("/api/admin/picks").then((r) => (r.ok ? r.json() : { items: [] })).then((d) => setItems(d.items || [])).catch(() => setItems([]));
+  useEffect(() => { void load(); }, []);
+  async function post(body: any, label: string) {
+    setBusy(label);
+    const r = await fetch("/api/admin/picks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    setBusy("");
+    if (!r.ok) alert(d.error || "Action failed");
+    if (body.action === "run") setLog([`Picked ${d.picked ?? 0} of ${d.judged ?? 0} judged (${d.candidates ?? 0} candidates, ${d.model || ""})`, ...(d.log || [])]);
+    void load();
+  }
+  const color: Record<string, string> = { published: "#3ea76a", hidden: "#b0364f", rejected: "#8a9499" };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20 }}>Design Picks</h2>
+          <div style={{ fontSize: 12.5, color: "#8a9499" }}>Every day Claude reviews new GitHub designs from your Sources (and GitHub's kicad / open-hardware topics) and publishes the best few on the Open hardware tab. Designs it turned down are listed as “rejected”.</div>
+        </div>
+        <button style={btnPrimary} disabled={!!busy} onClick={() => post({ action: "run" }, "run")}>{busy === "run" ? "Running… (up to a few minutes)" : "Run today's selection now"}</button>
+      </div>
+      {log.length > 0 && <pre style={{ background: "#f6f8f9", padding: 10, borderRadius: 8, fontSize: 12, whiteSpace: "pre-wrap" }}>{log.join("\n")}</pre>}
+      {!items ? <p>Loading…</p> : !items.length ? <p style={{ color: "#8a9499" }}>No picks yet. The selection runs daily at 05:40 UTC, after the discovery run.</p> : (
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+          <tbody>
+            {items.map((p) => (
+              <tr key={p.id}>
+                <Td>{p.pickDate}</Td>
+                <Td style={{ maxWidth: 480 }}>
+                  <b>{p.title}</b> <span style={{ color: "#8a9499", fontSize: 12 }}>score {p.score}</span>
+                  <div style={{ fontSize: 12.5, color: "#5a6b72" }}>{p.intro}</div>
+                  {p.caveat && <div style={{ fontSize: 12, color: "#9a6b08" }}>⚠ {p.caveat}</div>}
+                  <a href={p.repoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>{p.repoUrl.replace("https://github.com/", "")}</a>
+                </Td>
+                <Td style={{ color: color[p.status] || "#333", fontWeight: 600 }}>{p.status}</Td>
+                <Td>
+                  {p.status === "published"
+                    ? <button style={btnGhost} disabled={!!busy} onClick={() => post({ action: "hide", id: p.id }, "x")}>Hide</button>
+                    : <button style={btnGhost} disabled={!!busy} onClick={() => post({ action: "publish", id: p.id }, "x")}>Publish</button>}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
