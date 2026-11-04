@@ -282,3 +282,8 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 
 - **EasyEDA 3D 模型**：工程里每个元件的 `outline3D` 节点带 EasyEDA 模型 ID。新增 `/api/maker/easyeda-model/{uuid}` 由服务端转发 EasyEDA 自己的模型（`modules.easyeda.com/3dmodel/{uuid}`，OBJ，毫米；浏览器跨域取不到），CDN 缓存 30 天，不计访客查询。浏览器解析 OBJ（内嵌材质颜色），按 EasyEDA / easyeda2kicad 的放置规则：以 3D 外形中心为准，底面贴板面再加 `z` 偏移，`c_rotation` 旋转（Z 向取与外形尺寸吻合的方向）。模型尺寸与外形差 3 倍以上视为不符，保留灰色外形体。同一模型只取一次。状态栏写明加载了几个、其余是近似外形。本环境连不上 EasyEDA，真实模型的效果需在预览/线上确认；机制用模拟 OBJ 测过。
 - **同一仓库里的多块板子**（如 greatscottgadgets/hackrf 的 hackrf-one 与 operacake）：卡片注明「In 仓库 · 文件夹」；图片先找仓库里以文件夹命名的图片（`docs/images/operacake.jpeg`，照片优先于框图），找不到再用仓库的图。
+
+## 18. 一个仓库里有多个工程时默认选哪个；KiCad 10
+
+- mlab-modules/STM32TQ6401 的 `doc/gen/STM32TQ6401.brd` 不是 EAGLE 板，而是另一种工具导出的 BRDOUT 文本（板框 + 网表），却排在第一个被默认选中，导入后提示「不支持」。现在排序优先真正的设计：有 `.kicad_pro`、原理图 + PCB 齐全的工程在前，`doc / gen / output / fab / gerber / production` 等输出目录里的放最后；分数相同时目录层级浅的（主板）在前。
+- 实测 KiCad 10 格式（版本 2026xxxx）的板子能正常解析，提示文字和「Supported CAD formats」改为 KiCad 5–10；解析失败时提示 .brd 不一定是 EAGLE，可换列表里的其他工程。

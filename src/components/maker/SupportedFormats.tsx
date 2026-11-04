@@ -3,7 +3,7 @@ export const CAD_ACCEPT =
   ".zip,.kicad_pro,.kicad_sch,.kicad_pcb,.kicad_mod,.kicad_sym,.pro,.sch,.lib,.brd,.lbr,.PrjPcb,.SchDoc,.PcbDoc,.json,.epro,.eprj,.esch,.epcb,.step,.stp,.wrl";
 
 export const CAD_FORMATS: { name: string; files: string }[] = [
-  { name: "KiCad 5–9", files: ".kicad_pro · .kicad_sch · .kicad_pcb · KiCad 5 .sch with its -cache.lib" },
+  { name: "KiCad 5–10", files: ".kicad_pro · .kicad_sch · .kicad_pcb · KiCad 5 .sch with its -cache.lib" },
   { name: "Autodesk EAGLE 6+ / Fusion 360 export", files: ".sch · .brd (XML)" },
   { name: "Altium Designer", files: ".PrjPcb · .SchDoc · .PcbDoc" },
   { name: "EasyEDA Standard", files: "exported Schematic_*.json · PCB_*.json" },
