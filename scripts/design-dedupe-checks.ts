@@ -11,6 +11,14 @@ const vendor = { ...base, id: "d_e", kind: "vendor" as const, name: "TI board", 
 
 assert.deepEqual(dedupeDesigns([page, one, opera, other, vendor] as any).map((d) => d.id), ["d_a", "d_c", "d_d", "d_e"]);
 assert.deepEqual(dedupeDesigns([one, page] as any).map((d) => d.id), ["d_a"], "order does not matter");
+// The project-page record names the repository by its old name (GitHub follows renames, so the stars,
+// description and picture are the same): still one board.
+const renamed = { ...page, id: "d_r", summary: "low cost software radio platform", sourceUrl: "https://github.com/mossmann/hackrf" };
+const oneDesc = { ...one, summary: "low cost software radio platform" };
+assert.deepEqual(dedupeDesigns([renamed, oneDesc, opera] as any).map((d) => d.id), ["d_a", "d_c"], "old repository name: still one board");
+// Different boards that happen to share stars and part count but not the description stay apart.
+const lookalike = { ...base, id: "d_l", name: "lookalike", partCount: 99, summary: "something else", sourceUrl: "https://github.com/x/y" };
+assert.equal(dedupeDesigns([oneDesc, lookalike] as any).length, 2);
 console.log("design dedupe checks passed");
 
 

@@ -859,17 +859,45 @@ export function dedupeDesigns(designs: DesignCard[]): DesignCard[] {
     const name = d.name.toLowerCase().replace(/[^a-z0-9]/g, "");
     return (folder && name.includes(folder) ? 4 : 0) + (folder ? 2 : 0);
   };
-  const best = new Map<string, DesignCard>();
+  /**
+   * Two keys for "the same board recorded twice":
+   *  - same repository, part count and EDA tool;
+   *  - same stars, part count, EDA tool and (non-empty) description. This catches a record that names the
+   *    repository by an old name (mossmann/hackrf → greatscottgadgets/hackrf: GitHub follows the
+   *    rename, so stars, picture and description are identical) — two different boards matching on
+   *    all four is very unlikely.
+   */
+  const keys = (d: DesignCard): string[] => {
+    if (d.kind !== "open_source" || d.partCount <= 0) return [];
+    const eda = (d.edaTool || "").toLowerCase();
+    const out: string[] = [];
+    const repo = where(d)?.[1]?.toLowerCase();
+    if (repo) out.push(`repo:${repo}|${d.partCount}|${eda}`);
+    const about = (d.summary || "").trim().toLowerCase();
+    if ((d.stars ?? 0) >= 1 && d.partCount >= 5 && about.length >= 10) out.push(`same:${d.stars}|${d.partCount}|${eda}|${about}`);
+    return out;
+  };
+  // Group records that share any key (a record can link two groups).
+  const group = new Map<DesignCard, number>();
+  const byKey = new Map<string, number>();
+  const parent: number[] = [];
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  designs.forEach((d, i) => {
+    parent.push(i);
+    group.set(d, i);
+    for (const k of keys(d)) {
+      const j = byKey.get(k);
+      if (j === undefined) byKey.set(k, i);
+      else parent[find(i)] = find(j);
+    }
+  });
+  const best = new Map<number, DesignCard>();
   for (const d of designs) {
-    const repo = d.kind === "open_source" && d.partCount > 0 ? where(d)?.[1]?.toLowerCase() : null;
-    if (!repo) continue;
-    const key = `${repo}|${d.partCount}|${(d.edaTool || "").toLowerCase()}`;
-    const cur = best.get(key);
-    if (!cur || score(d) > score(cur) || (score(d) === score(cur) && (d.stars ?? 0) > (cur.stars ?? 0))) best.set(key, d);
+    if (!keys(d).length) continue;
+    const g = find(group.get(d)!);
+    const cur = best.get(g);
+    if (!cur || score(d) > score(cur) || (score(d) === score(cur) && (d.stars ?? 0) > (cur.stars ?? 0))) best.set(g, d);
   }
   const kept = new Set(best.values());
-  return designs.filter((d) => {
-    const repo = d.kind === "open_source" && d.partCount > 0 ? where(d)?.[1]?.toLowerCase() : null;
-    return !repo || kept.has(d);
-  });
+  return designs.filter((d) => !keys(d).length || kept.has(d));
 }
