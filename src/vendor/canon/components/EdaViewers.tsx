@@ -41,12 +41,14 @@ function numericPoint(value?: IrPoint): NumericPoint | undefined {
 function boundsOf(points: Array<NumericPoint | undefined>): Bounds | undefined {
   const valid = points.filter((value): value is NumericPoint => Boolean(value));
   if (!valid.length) return undefined;
-  const xs = valid.map((value) => value.x);
-  const ys = valid.map((value) => value.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
+  // A loop, not Math.min(...xs): a large board has more points than a call can take as arguments.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const value of valid) {
+    if (value.x < minX) minX = value.x;
+    if (value.x > maxX) maxX = value.x;
+    if (value.y < minY) minY = value.y;
+    if (value.y > maxY) maxY = value.y;
+  }
   const width = Math.max(maxX - minX, 1);
   const height = Math.max(maxY - minY, 1);
   return { minX: minX - width * 0.04, minY: minY - height * 0.04, maxX: maxX + width * 0.04, maxY: maxY + height * 0.04 };

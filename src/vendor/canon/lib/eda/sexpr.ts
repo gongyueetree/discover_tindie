@@ -252,7 +252,9 @@ export function allDescendants(node: SList, childHead?: string): SList[] {
   while (pending.length) {
     const current = pending.pop()!;
     if (!childHead || head(current) === childHead) result.push(current);
-    pending.push(...directChildren(current));
+    // A loop, not push(...children): a filled zone can have hundreds of thousands of points, and
+    // spreading that many arguments overflows the call stack.
+    for (const child of directChildren(current)) pending.push(child);
   }
   return result;
 }
