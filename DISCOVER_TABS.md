@@ -381,3 +381,8 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 迁移内容：`middleware.ts` 改名为 Next 16 的 `proxy.ts`（Node 运行时）；页面和路由的 `params` / `searchParams` / `cookies()` 改为异步（官方 codemod + Maker 路由手动改）；`req.ip` 已移除，改读转发头；`experimental.serverComponentsExternalPackages` 改为 `serverExternalPackages`；Zod 4 的 `z.record` 需要显式键类型。构建默认改用 Turbopack。
 
 验证：`tsc`、36/36 检查、生产构建通过；本地生产服务器上首页、文章深链、归档、目录、标签页、三个工具页均 200；浏览器里打开 NSynth Super（原理图 / PCB / 3D）、PCB planner、登录后台（Design Picks）无页面错误；后台接口的 Zod 校验（非法 400 / 合法 200）正常。
+## 25. KiCad 4/5 工程缺少符号缓存时的原理图
+
+googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没有 `-cache.lib`：电阻、电容、GND、连接器、稳压器、光耦等 13 种标准符号没有图形，原理图上只剩引脚和 ✕。另外 KiCad 4 的元件不带库名（`L R R1`），原来连工程自带的 `custom.lib` 也查不到。
+
+现在：没有库名的元件按 KiCad 的做法依次在工程的库里查找；仍缺的符号，查看器按工程列出的库（KiCad 4：`.pro` 里的 LibName 顺序；KiCad 5：`库名:符号` 的库名）向 `/api/maker/kicad-symbols` 请求，服务端从 KiCad 官方库取出这些符号（KiCad 4 → GitHub KiCad/kicad-library 4.0.7；KiCad 5 → GitLab kicad-symbols 5.1.12），只返回需要的那几个，CDN 缓存。名字大小写不同（4.0.7 把 CONN_01X08 改名为 Conn_01x08）作为最后的匹配。查看器上方注明有几种符号来自 KiCad 标准库、可能与作者的略有不同。从 GitHub 导入时也会带上 `.pro` 列出的工程自带库（如 custom.lib）。

@@ -21,6 +21,7 @@ import {
 import { ToolHeading } from "./ToolShell";
 import { filesToInputAssets } from "@/vendor/canon/lib/eda/archive";
 import { parseEdaProject } from "@/vendor/canon/lib/eda/parse";
+import { missingLegacySymbols, STANDARD_LIBRARY_PATH } from "@/vendor/eelib/kicad-legacy";
 import type {
   CanonicalIrBundle,
   InputAsset,
@@ -75,13 +76,35 @@ export default function Viewer({
     [status, setStatus] = useState(""),
     [error, setError] = useState(""),
     [design, setDesign] = useState<DesignInfo | null>(null),
-    [github, setGithub] = useState<GithubRef>(null);
+    [github, setGithub] = useState<GithubRef>(null),
+    [libraryNote, setLibraryNote] = useState("");
   const input = useRef<HTMLInputElement>(null);
   async function open(files: File[], source: ProjectOrigin = "local"): Promise<boolean> {
     setBusy(true);
     setError("");
     try {
       const r = await filesToInputAssets(files);
+      // A KiCad 4/5 project published without its symbol cache: add the standard KiCad symbols it
+      // names, so R, C, GND, connectors… are drawn instead of bare pins (lib/maker/kicad-legacy-symbols).
+      setLibraryNote("");
+      const missing = missingLegacySymbols(r.assets);
+      if (missing) {
+        try {
+          const qs = new URLSearchParams({ v: String(missing.version), libs: missing.libraries.join(","), names: missing.names.join(",") });
+          const lib = await fetch("/api/maker/kicad-symbols?" + qs);
+          if (lib.ok) {
+            const found = Number(lib.headers.get("X-Symbols-Found")) || 0;
+            if (found) {
+              r.assets.push({ path: STANDARD_LIBRARY_PATH, bytes: new Uint8Array(await lib.arrayBuffer()) });
+              setLibraryNote(
+                `${found} of ${missing.names.length} symbol types are drawn from KiCad ${missing.version}'s standard library: this project was published without its symbol cache, so they may differ slightly from the author's.`,
+              );
+            }
+          }
+        } catch {
+          /* offline or unavailable: draw what the project contains */
+        }
+      }
       const b = await parseEdaProject(r.assets, r.diagnostics);
       if (!b.schematics.length && !b.pcbs.length)
         throw Error(
@@ -286,6 +309,7 @@ export default function Viewer({
         </div>
       )}
       {busy && <div className="notice info" role="status">{status || "Loading engineering files…"}</div>}
+      {!busy && libraryNote && bundle && <div className="notice info">{libraryNote}</div>}
       {design && !bundle && !busy ? (
         design.bom ? <DesignBom design={design} /> : null
       ) : !bundle ? (

@@ -205,5 +205,13 @@ export function referencedFiles(path: string, text: string) {
       const resolved = resolveRepoPath(dir, m[1]);
       if (resolved) result.push(resolved);
     }
+  // KiCad 4/5 project: the symbol libraries it lists (LibName1=custom → custom.lib). Standard ones
+  // are not in the repository and are skipped by the import; the viewer adds those itself.
+  if (/\.pro$/i.test(path))
+    for (const m of text.matchAll(/^LibName\d+=(.+?)\s*$/gm)) {
+      const name = m[1].replace(/\\/g, "/");
+      const resolved = resolveRepoPath(dir, /\.lib$/i.test(name) ? name : name + ".lib");
+      if (resolved) result.push(resolved);
+    }
   return result;
 }

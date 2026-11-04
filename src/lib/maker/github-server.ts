@@ -345,7 +345,7 @@ export async function importGithub(selection: string, projectId: string) {
       throw new SourceError("Selected design exceeds 75 MB.", 413);
     data[path] = b;
     if (
-      /\.(kicad_sch|kicad_pcb|kicad_pro|sch|brd|PrjPcb)$/i.test(path) ||
+      /\.(kicad_sch|kicad_pcb|kicad_pro|pro|sch|brd|PrjPcb)$/i.test(path) ||
       /lib-table$/.test(path)
     ) {
       for (const dep of referencedFiles(path, new TextDecoder().decode(b))) {
@@ -358,7 +358,8 @@ export async function importGithub(selection: string, projectId: string) {
                   /\.kicad_mod$/i.test(f.path),
               )
               .map((f) => f.path);
-        if (!candidates.length) skipped.push(dep);
+        // A KiCad 4/5 standard library named by the .pro is not in the repository: not a missing file.
+        if (!candidates.length && !/\.lib$/i.test(dep)) skipped.push(dep);
         for (const p of candidates)
           if (!queued.has(p)) {
             queued.add(p);
