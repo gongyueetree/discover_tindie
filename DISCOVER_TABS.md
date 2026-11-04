@@ -260,3 +260,8 @@ npm run build:kicad-index   # （可选）重新生成 KiCad 官方库名称索�
 **刷新供应商价格**：本站没配 DigiKey / Mouser 时，按钮置灰并直接说明「DigiKey 和 Mouser 未接入，可手动填单价」，不再点了像没反应。接入需要 Vercel 环境变量 `DIGIKEY_CLIENT_ID`、`DIGIKEY_CLIENT_SECRET`、`DIGIKEY_ENV=production` 和/或 `MOUSER_API_KEY`。表格里「Unpriced」和「No live price found.」分两行显示。
 
 **Today's Hardware Discoveries → View design files**：卡片出现在屏幕上时，服务端按发现条目 id 查它的来源：本身是 GitHub 仓库就用它，否则读文章页面里链接的 GitHub 仓库（按出现顺序最多查 3 个），只有仓库里有查看器能打开的工程文件（非 LFS 占位）才在卡片和详情抽屉里显示「View design files」。点击直接弹出 Open hardware 的在线查看器，自动扫描该仓库并打开推荐的工程。结果按条目缓存一天。只对能看到新 Tab 的访客显示。目前只支持 GitHub（查看器的导入只支持 GitHub）。
+
+## 14. KiCad 导出：板子放在图纸中间
+
+用 KiCad 10.0.1（官方 kicad/kicad 镜像，命令行 + 图形界面）实测：导出文件能正常打开（含 ezPLM 自建库的旧格式封装），只提示「旧版本文件，保存时转换」。macOS 上「一直转」多半是 KiCad 首次启动向导或系统权限对话框藏在主窗口后面。
+导出时板子原点原来在 (0,0)，会压在 A4 图框左上角；现在整体平移到图纸中间（`shiftBoard` / `pageOffset`，整毫米，离图纸边至少 10 mm），封装内部坐标不动。
