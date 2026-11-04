@@ -292,3 +292,24 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 
 零件库里 hackrf-one 有两条记录：一条从仓库文件夹 `hardware/hackrf-one` 导入（许可 CERN-OHL-P，取自硬件文件夹），另一条来自引用整个仓库的项目页面（标题「Opera Cake: DOPPLER DIRECTION FINDING…」，BOM 取到的仍是 hackrf-one 的 99 个零件，许可是仓库的软件许可 GPL-2.0）。图片、零件数、星数相同，许可不同。
 `dedupeDesigns`（`src/lib/partdata/maker.ts`）：同一仓库、零件数和 EDA 工具都相同的开源设计视为同一份文件，只保留最具体的一条（文件夹名与设计名一致 > 有文件夹 > 星数多）。根源在零件库导入时没有按 BOM 去重，需要在 ezplm_partdata 侧清理。
+
+## 20. 每日 AI 推荐开源设计（Open hardware → Fresh open hardware）
+
+每天由大模型从后台管理的信息源里挑出值得推荐的开源参考设计，放在 Open hardware TAB 顶部，附简介，可直接在线查看工程文件，也可跳到 Resources 看详情。
+
+**流程**（`src/lib/design-picks.ts`，Vercel Cron `/api/cron/design-picks`，每天 05:40 UTC，在 05:00 的每日发现之后）：
+
+1. **候选**：最近 10 天已发布的每日发现（来自 /admin → Sources 里管理的信息源）中，能找到 GitHub 工程的（与「View design files」同一套判断：源链接本身是仓库，或文章里链接的仓库）；配了 `MAKER_GITHUB_TOKEN` 时，再加上 GitHub 近 7 天新建、带 kicad / open-hardware / pcb / easyeda 话题的仓库。只保留查看器能打开的（有支持的原理图 / PCB、不是 Git LFS 指针），且以前没评过的。
+2. **事实取自 GitHub**：许可（GitHub 识别的 SPDX）、星数、创建 / 最近提交日期、README（设计文件夹优先）、工程文件列表。这些字段不由大模型生成。
+3. **Claude 审阅**（默认 `claude-opus-5-5`，结构化输出，`DESIGN_PICKS_MODEL` 可改）：读文章 + README + 文件列表，判断是否推荐、打分，写标题、2–3 句简介、要点、注意事项（如「作者称尚未制板」「PCB 还没走线」「3D 模型另有许可」——只写来源里说了的）。文章和 README 作为不可信数据传入，提示词明确忽略其中的指令。
+4. **发布**：推荐且分数 ≥ 60 的前 `DESIGN_PICKS_PER_DAY`（默认 3）个。只从 GitHub 找到、没有文章的设计，同时生成一篇 Resources 文章（来源 GitHub），保证「Read more」有处可去。没选上的记为 rejected，以后不再重复评（不重复花费）。
+
+**页面**：Open hardware 顶部「Fresh open hardware」卡片（近两周，默认显示 3 个，可展开）：日期、许可、EDA 格式、星数、简介、要点、注意事项；「View design files」直接在查看器里打开该仓库/文件夹；「Read more」跳到 Resources 并打开该文章（新增 `/?d=<文章 id>` 深链接）；GitHub 图标打开仓库。卡片下注明摘要由 AI 撰写、未人工核对、Tindie 未制板验证。
+
+**后台**：/admin → 🧩 Design Picks：近 30 天的推荐和被拒的设计（含分数、简介、注意事项），可隐藏 / 恢复，也可「Run today's selection now」立即跑一次（几分钟内完成）。
+
+**数据表**：`design_picks`（`drizzle/0003_design_picks.sql`）。第一次使用时自动创建（`CREATE TABLE IF NOT EXISTS`），不需要手动迁移。
+
+**环境变量**：需要 `ANTHROPIC_API_KEY`（每日发现已在用）和 `CRON_SECRET`；未配 `ANTHROPIC_API_KEY` 时什么都不写，不会生成没有依据的简介。建议配 `MAKER_GITHUB_TOKEN`（GitHub 搜索新仓库需要它）。费用：每天最多评 `DESIGN_PICKS_MAX_JUDGED`（默认 10）个候选，每个一次调用。
+
+**验证**：本环境连不上 GitHub 和 Claude API，整条流程用本地 Postgres + 模拟 GitHub + 模拟 Claude API 跑通（`scripts/design-picks-checks.ts` 覆盖纯逻辑）；真实效果需在预览上用后台按钮跑一次确认。

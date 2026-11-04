@@ -71,9 +71,9 @@ export type Discovery = {
   isPick: boolean | null; saveCount: number | null; commentCount: number | null;
 };
 
-export function DiscoveryGrid({ items, designViewer = false }: { items: Discovery[]; designViewer?: boolean }) {
+export function DiscoveryGrid({ items, designViewer = false, initialDetail = null }: { items: Discovery[]; designViewer?: boolean; initialDetail?: Discovery | null }) {
   const { q } = useHomeSearch();
-  const [detail, setDetail] = useState<Discovery | null>(null);
+  const [detail, setDetail] = useState<Discovery | null>(initialDetail);
   const [viewing, setViewing] = useState<string | null>(null);
 
   let shown = items;

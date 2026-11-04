@@ -15,6 +15,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, BadgeCheck, Boxes, CircuitBoard, ExternalLink, FileSpreadsheet, Github, ImageOff, Search, Star, Upload } from "lucide-react";
 import ProjectViewerModal, { type ProjectRequest } from "./ProjectViewerModal";
 import { ToolHeading } from "./ToolShell";
+import DesignPicks from "./DesignPicks";
 
 type Design = {
   id: string;
@@ -187,6 +188,7 @@ export default function Circuits() {
       />
       {viewer && <ProjectViewerModal request={viewer} onClose={closeViewer} />}
       <SupportedFormats />
+      <DesignPicks onOpen={(github) => setViewer({ search: "", mode: "github", github })} />
 
       <form
         className="search-bar"

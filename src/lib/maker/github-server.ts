@@ -588,3 +588,88 @@ export function githubUsable(url: string): Promise<boolean | null> {
   });
   return value;
 }
+
+/* ------------------------------------------------------------------ facts for the daily design picks */
+
+export type RepoFacts = {
+  url: string;
+  repo: string;
+  description: string | null;
+  license: string | null;
+  stars: number;
+  fork: boolean;
+  archived: boolean;
+  createdAt: string | null;
+  pushedAt: string | null;
+  readme: string;
+  image: string | null;
+  projects: { name: string; format: string; directory: string }[];
+};
+
+/**
+ * What GitHub itself says about a design: licence, stars, dates, the README text (design folder first,
+ * then the repository root; at most 12 000 characters) and the engineering projects the viewer found.
+ * Throws SourceError when GitHub cannot be read.
+ */
+export async function githubRepoFacts(url: string): Promise<RepoFacts> {
+  const where = githubRepoOf(url);
+  if (!where) throw new SourceError("Not a GitHub repository.", 400);
+  const meta = await github("/repos/" + where.repo);
+  const repo = typeof meta.full_name === "string" ? meta.full_name : where.repo;
+  let readme = "";
+  let image: string | null = null;
+  for (const dir of [...new Set([where.subdir.replace(/^\/+|\/+$/g, ""), ""])]) {
+    if (dir && !dir.split("/").every((x) => /^[^.][^/]*$/.test(x))) continue;
+    try {
+      const ref = where.commit ? `?ref=${encodeURIComponent(where.commit)}` : "";
+      const d = await github(`/repos/${repo}/readme${dir ? "/" + dir.split("/").map(encodeURIComponent).join("/") : ""}${ref}`);
+      if (d?.encoding !== "base64" || typeof d.content !== "string" || (d.size || 0) > 400_000) continue;
+      const md = Buffer.from(d.content, "base64").toString("utf8");
+      readme = md.slice(0, 12_000);
+      const base = typeof d.download_url === "string" ? d.download_url : `https://raw.githubusercontent.com/${repo}/HEAD/${d.path || "README.md"}`;
+      image = readmeImage(md, base);
+      break;
+    } catch (e) {
+      if (!(e instanceof SourceError && e.status === 404)) throw e;
+    }
+  }
+  let projects: RepoFacts["projects"] = [];
+  try {
+    projects = (await scanGithub(url)).projects.slice(0, 12).map((p) => ({ name: p.name, format: p.format, directory: p.directory }));
+  } catch {
+    projects = [];
+  }
+  const spdx = meta.license?.spdx_id;
+  return {
+    url,
+    repo,
+    description: typeof meta.description === "string" ? meta.description.slice(0, 400) : null,
+    license: typeof spdx === "string" && spdx !== "NOASSERTION" ? spdx : null,
+    stars: Number(meta.stargazers_count) || 0,
+    fork: !!meta.fork,
+    archived: !!meta.archived,
+    createdAt: typeof meta.created_at === "string" ? meta.created_at : null,
+    pushedAt: typeof meta.pushed_at === "string" ? meta.pushed_at : null,
+    readme,
+    image,
+    projects,
+  };
+}
+
+/**
+ * Public repositories created since `since` (YYYY-MM-DD) that are tagged as hardware projects
+ * (KiCad / open hardware / PCB topics), most starred first. Forks and archived repositories are left out.
+ */
+export async function githubNewHardware(since: string, perTopic = 10): Promise<string[]> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new SourceError("Invalid date.", 400);
+  const out: string[] = [];
+  for (const topic of ["kicad", "open-hardware", "pcb", "easyeda"]) {
+    const q = encodeURIComponent(`topic:${topic} created:>=${since} fork:false archived:false`);
+    const d = await github(`/search/repositories?q=${q}&sort=stars&order=desc&per_page=${perTopic}`);
+    for (const r of d?.items || []) {
+      const url = typeof r.html_url === "string" ? r.html_url : "";
+      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(url) && !out.some((u) => u.toLowerCase() === url.toLowerCase())) out.push(url);
+    }
+  }
+  return out;
+}

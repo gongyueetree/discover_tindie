@@ -22,7 +22,13 @@
       "when": 1788674400000,
       "tag": "0002_project_import_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793750400000,
+      "tag": "0003_design_picks",
+      "breakpoints": true
     }
   ]
 }
-

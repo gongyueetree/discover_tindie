@@ -207,6 +207,10 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
       const d = hasDb ? await (await import("@/lib/queries")).getDiscovery(Number(a)).catch(() => null) : null;
       if (!d || d.status !== "published") throw new SourceError("Not found", 404);
       result = { github: await (await import("@/lib/maker/discovery-repo")).discoveryRepo(d.id, d.sourceUrl) };
+    } else if (req.method === "GET" && head === "picks" && path.length === 1) {
+      // Fresh open hardware: the designs Claude recommended in the last two weeks (daily cron).
+      const hasDb = Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
+      result = { items: hasDb ? await (await import("@/lib/design-picks")).recentPicks().catch(() => []) : [] };
     } else if (req.method === "GET" && head === "easyeda-model" && path.length === 2 && /^[0-9a-f]{32}$/.test(a)) {
       // A part's 3D model from EasyEDA's library (OBJ text, mm), as EasyEDA's own viewer loads it. The
       // project names it by id; the browser cannot fetch it cross-origin, so this route relays it.
@@ -364,10 +368,10 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
  * module or family, one design, one part, and knowledge-graph rankings. Searches (parts?q=, designs
  * by part number) are not shared: each counts as the visitor's own query.
  */
-const SHARED = /^(modules|suppliers|circuits|circuits\/d_[a-z2-7]+(?:\/cover)?|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
+const SHARED = /^(modules|suppliers|picks|circuits|circuits\/d_[a-z2-7]+(?:\/cover)?|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
-const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^translate$/;
+const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^picks$|^translate$/;
 const charged = (req: NextRequest, ctx: { params: { path: string[] } }) =>
   oneVisitorCharge(() => handle(req, ctx), { passive: PASSIVE.test(ctx.params.path.join("/")) });
 export const GET = charged;
