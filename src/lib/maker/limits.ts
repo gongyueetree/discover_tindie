@@ -13,11 +13,19 @@ import "server-only";
  */
 import { Redis } from "@upstash/redis";
 import { SourceError } from "./server";
-import { currentWho } from "./request-context";
+import { currentWho, outsideRequest, redisSignal, remainingMs } from "./request-context";
 
+/**
+ * Every Redis command is bounded by the current request's time left (at most 3 s, see redisSignal) and
+ * retried at most once inside that time: a slow or unreachable Redis cannot hold a request past its
+ * deadline. A command cut off counts as a failure — budgets then refuse the paid call (fail closed).
+ */
+export function makeRedis(url: string, token: string) {
+  return new Redis({ url, token, signal: redisSignal, retry: { retries: 1, backoff: () => 50 } });
+}
 const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
 const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-let redis: Redis | null = url && token ? new Redis({ url, token }) : null;
+let redis: Redis | null = url && token ? makeRedis(url, token) : null;
 
 /** Tests only: replace the Redis client (null = not configured). */
 export function __setRedisForTests(r: unknown) {
@@ -42,13 +50,17 @@ function localHit(key: string, limit: number, windowMs: number) {
   return ++x.n <= limit;
 }
 
-/** Fixed one-minute window in Redis: INCR + EXPIRE on first hit. Returns the count, or null when Redis failed. */
-async function redisCount(key: string, ttlSeconds: number): Promise<number | null> {
+/** INCRBY + EXPIRE in one step (a counter can never be left without its expiry). */
+const COUNT_LUA = `-- count
+local n = redis.call('INCRBY', KEYS[1], tonumber(ARGV[1]))
+if n == tonumber(ARGV[1]) or redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2])) end
+return n`;
+
+/** Fixed one-minute window in Redis. Returns the count, or null when Redis failed. */
+async function redisCount(key: string, ttlSeconds: number, by = 1): Promise<number | null> {
   if (!redis) return null;
   try {
-    const n = await redis.incr(key);
-    if (n === 1) await redis.expire(key, ttlSeconds);
-    return n;
+    return Number(await redis.eval(COUNT_LUA, [key], [String(by), String(ttlSeconds)]));
   } catch {
     return null;
   }
@@ -201,6 +213,17 @@ async function fromRedis<T>(key: string): Promise<T | null> {
   }
 }
 
+/** `p`, or SupplierUnavailable once `deadline` (or the request's own deadline / cancel) passes first. */
+function untilDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
+  const ms = Math.min(deadline - Date.now(), remainingMs());
+  if (ms <= 0) return Promise.reject(new SupplierUnavailable("Not enough time left for a live lookup"));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => (timer = setTimeout(() => reject(new SupplierUnavailable("Another visitor is fetching this price — try again in a moment")), ms))),
+  ]).finally(() => clearTimeout(timer));
+}
+
 /** A live lookup was not started (budget, cooldown, deadline, shared lock unavailable): shown as-is. */
 export class SupplierUnavailable extends Error {}
 
@@ -225,11 +248,15 @@ export async function supplierCached<T>(key: string, load: () => Promise<T>, dea
     return { value: stored, cached: true };
   }
   const running = inflight.get(key) as Promise<T> | undefined;
-  if (running) return { value: await running, cached: true };
+  // Waiting on another request's lookup: this request still leaves at its own deadline.
+  if (running) return { value: await untilDeadline(running, deadline), cached: true };
+  if (Math.min(deadline - Date.now(), remainingMs()) < 1_500) throw new SupplierUnavailable("Not enough time left for a live lookup");
   const keep = async (value: T) => {
     if (memo.size > 5000) memo.clear();
     memo.set(key, { until: Date.now() + TTL * 1000, value });
-    if (redis) await redis.set(key, value as any, { ex: TTL }).catch(() => undefined);
+    const r = redis;
+    // Stored even if this request's time ran out meanwhile: a paid answer is never thrown away.
+    if (r) await outsideRequest(() => r.set(key, value as any, { ex: TTL })).catch(() => undefined);
     return value;
   };
   const p = (async (): Promise<T> => {
@@ -248,7 +275,9 @@ export async function supplierCached<T>(key: string, load: () => Promise<T>, dea
           if (again !== null) return again;
           return await keep(await load());
         } finally {
-          await redis.eval(RELEASE_LUA, [`${key}:lock`], [token]).catch(() => undefined);
+          // Released even when this request's time is up (else the lock blocks others for LOCK_MS).
+          const r = redis;
+          await outsideRequest(() => r.eval(RELEASE_LUA, [`${key}:lock`], [token])).catch(() => undefined);
         }
       }
       const v = await fromRedis<T>(key);
@@ -292,9 +321,16 @@ export async function limitRoute(req: Request, bucket: Bucket): Promise<Response
 /* ------------------------------------------------------------------ 4. long-term use (anti-enumeration) */
 
 /**
- * Different resources opened per day (cached ones too): part and design pages ("detail"), and files
- * (datasheets, CAD files, 3D models — a board loads many, so the allowance is larger). Revisiting the
- * same resource is free. Per visitor (session, else IP) and, looser, per network (IP).
+ * Different resources opened per day: part and design pages and their CAD ("detail"), and files
+ * (datasheets, CAD files, 3D models — a board loads many, so the allowance is larger). Revisiting a
+ * resource already admitted today is free. Per visitor (session, else IP) and, looser, per network (IP).
+ *
+ * Admission is one atomic step over both subjects: a resource is admitted only if every subject that
+ * has not seen it yet still has room, and only then is it marked "seen" and counted for them. A refused
+ * resource leaves no mark, so retrying it (or many at once) stays refused (fourth audit F01).
+ *
+ * Only responses this function runs for are counted: controlled data (part / design details, ezPLM
+ * files) is never put in the shared CDN cache, so every visit reaches this check (F02).
  */
 const DISTINCT: Record<"detail" | "file", { visitor: string; network: string; v: number; n: number }> = {
   detail: { visitor: "MAKER_DAILY_DETAILS", network: "MAKER_NETWORK_DAILY_DETAILS", v: 600, n: 3000 },
@@ -302,80 +338,187 @@ const DISTINCT: Record<"detail" | "file", { visitor: string; network: string; v:
 };
 const localSeen = new Map<string, number>();
 
+/** KEYS = seen1, count1, seen2, count2…; ARGV[1] ttl seconds, ARGV[2..] the limits. 1 = admitted. */
+const ADMIT_LUA = `-- admit
+local ttl = tonumber(ARGV[1])
+local n = #KEYS / 2
+local fresh = {}
+for i = 1, n do
+  if redis.call('EXISTS', KEYS[2 * i - 1]) == 0 then
+    if tonumber(redis.call('GET', KEYS[2 * i]) or '0') + 1 > tonumber(ARGV[i + 1]) then return 0 end
+    fresh[#fresh + 1] = i
+  end
+end
+for _, i in ipairs(fresh) do
+  redis.call('SET', KEYS[2 * i - 1], '1', 'EX', ttl)
+  redis.call('INCR', KEYS[2 * i]); redis.call('EXPIRE', KEYS[2 * i], ttl)
+end
+return 1`;
+
+/** The full resource identity, hashed (never truncated: two long URLs sharing a prefix stay distinct). */
+async function resourceId(kind: string, id: string) {
+  const { createHash } = await import("node:crypto");
+  return createHash("sha256").update(kind + "\0" + id).digest("base64url").slice(0, 32);
+}
+
+const TOO_MANY = "You have opened a lot of different items today. Please come back tomorrow, or contact Tindie if you need bulk access.";
+
 export async function noteResource(kind: "detail" | "file", id: string) {
   const who = currentWho();
   if (!who) return;
   const d = day();
+  const rid = await resourceId(kind, id);
   const subjects: [string, number][] = [
     [who.sid ? "s:" + who.sid : "n1:" + who.ip, envBudget(DISTINCT[kind].visitor, DISTINCT[kind].v)],
     ["n:" + who.ip, envBudget(DISTINCT[kind].network, DISTINCT[kind].n)],
   ];
-  const rid = id.slice(0, 200);
-  for (const [subject, limit] of subjects) {
-    const seenKey = `mk:seen:${d}:${kind}:${subject}:${rid}`;
-    const countKey = `mk:distinct:${d}:${kind}:${subject}`;
-    let count: number | null = null;
-    if (redis) {
-      try {
-        const fresh = await redis.set(seenKey, 1, { nx: true, ex: 2 * 86400 });
-        if (fresh !== "OK") continue; // already counted today
-        count = await redis.incr(countKey);
-        if (count === 1) await redis.expire(countKey, 2 * 86400);
-      } catch {
-        count = null; // counting unavailable: browsing is not blocked for it
-      }
+  const keys = subjects.flatMap(([subject]) => [`mk:seen:${d}:${kind}:${subject}:${rid}`, `mk:distinct:${d}:${kind}:${subject}`]);
+  if (redis) {
+    const r = redis;
+    const ok = await r.eval(ADMIT_LUA, keys, [String(2 * 86400), ...subjects.map(([, l]) => String(l))]).catch(() => null);
+    if (ok !== null) {
+      if (Number(ok) !== 1) throw new SourceError(TOO_MANY, 429);
+      return;
     }
-    if (count === null) {
-      if (localSeen.size > 50000) localSeen.clear();
-      if (localSeen.has(seenKey)) continue;
-      localSeen.set(seenKey, 1);
-      count = (localSeen.get(countKey) || 0) + 1;
-      localSeen.set(countKey, count);
-    }
-    if (count > limit)
-      throw new SourceError("You have opened a lot of different items today. Please come back tomorrow, or contact Tindie if you need bulk access.", 429);
+    // Counting unavailable: fall back to this instance's own count (browsing is not blocked for it).
+  }
+  // Same rule in memory (synchronous, so atomic within the instance).
+  if (localSeen.size > 50000) localSeen.clear();
+  const fresh: number[] = [];
+  for (let i = 0; i < subjects.length; i++) {
+    if (localSeen.has(keys[2 * i])) continue;
+    if ((localSeen.get(keys[2 * i + 1]) || 0) + 1 > subjects[i][1]) throw new SourceError(TOO_MANY, 429);
+    fresh.push(i);
+  }
+  for (const i of fresh) {
+    localSeen.set(keys[2 * i], 1);
+    localSeen.set(keys[2 * i + 1], (localSeen.get(keys[2 * i + 1]) || 0) + 1);
   }
 }
 
+/* ------------------------------------------------------------------ 5. download bytes */
+
+/**
+ * Bytes downloaded per day through the file routes (3D models, ezPLM files, datasheets): the distinct-
+ * file count does not limit fetching the same large file again and again. Checked before a download
+ * starts (already over → 429) and charged as the bytes actually go out, so a download in progress is
+ * never cut off half way. Per visitor and, looser, per network.
+ */
+function byteSubjects(): [string, number][] | null {
+  const who = currentWho();
+  if (!who) return null;
+  const mb = 1024 * 1024;
+  return [
+    [`mk:bytes:${day()}:${who.sid ? "s:" + who.sid : "n1:" + who.ip}`, envBudget("MAKER_DAILY_DOWNLOAD_MB", 2000) * mb],
+    [`mk:bytes:${day()}:n:${who.ip}`, envBudget("MAKER_NETWORK_DAILY_DOWNLOAD_MB", 10000) * mb],
+  ];
+}
+
+export async function checkDownloadBudget() {
+  const subjects = byteSubjects();
+  if (!subjects) return;
+  for (const [k, limit] of subjects) {
+    let used = localSeen.get(k) || 0;
+    if (redis) {
+      const r = redis;
+      const v = await r.get<number>(k).catch(() => null);
+      if (v !== null && v !== undefined) used = Math.max(used, Number(v) || 0);
+    }
+    if (used >= limit) throw new SourceError("You have downloaded a lot of files today. Please come back tomorrow.", 429);
+  }
+}
+
+/** `stream`, counting the bytes that pass through against today's download allowance. */
+export function meteredStream(stream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const subjects = byteSubjects();
+  if (!subjects) return stream;
+  let pending = 0;
+  const flush = () => {
+    if (!pending) return;
+    const n = pending;
+    pending = 0;
+    for (const [k] of subjects) {
+      localSeen.set(k, (localSeen.get(k) || 0) + n);
+      if (redis) void outsideRequest(() => redisCount(k, 2 * 86400, n));
+    }
+  };
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, c) {
+        pending += chunk.byteLength;
+        if (pending >= 1024 * 1024) flush();
+        c.enqueue(chunk);
+      },
+      flush,
+    }),
+  );
+}
+
+/** A file download: one more distinct file today, and the visitor not already over today's bytes. */
+export async function admitFile(id: string) {
+  await noteResource("file", id);
+  await checkDownloadBudget();
+}
+
+/* ------------------------------------------------------------------ 6. concurrent jobs */
+
 /**
  * At most `max` expensive jobs (BOM matching, GitHub scan / import) running at once per visitor, and
- * `network` per IP. Slots expire on their own if a function dies mid-job.
+ * `network` per IP. Each job holds a lease of its own (a token with its own expiry, in a sorted set):
+ * leases of jobs that died without releasing expire on their own, a refused request changes nothing
+ * (it cannot keep a dead job's slot alive), and a job only ever releases its own lease (F04).
  */
+const SLOT_LEASE_MS = 90_000;
+/** KEYS the slot sets; ARGV[1] now, ARGV[2] lease ms, ARGV[3] token, ARGV[4..] limits. 1 = taken. */
+const SLOT_TAKE_LUA = `-- slot-take
+local now = tonumber(ARGV[1])
+for i = 1, #KEYS do
+  redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now)
+  if redis.call('ZCARD', KEYS[i]) >= tonumber(ARGV[i + 3]) then return 0 end
+end
+for i = 1, #KEYS do
+  redis.call('ZADD', KEYS[i], now + tonumber(ARGV[2]), ARGV[3])
+  redis.call('PEXPIRE', KEYS[i], tonumber(ARGV[2]))
+end
+return 1`;
+const SLOT_FREE_LUA = `-- slot-free
+for i = 1, #KEYS do redis.call('ZREM', KEYS[i], ARGV[1]) end
+return 1`;
+const localSlots = new Map<string, Map<string, number>>();
+
 export async function withTaskSlot<T>(fn: () => Promise<T>, max = 2, network = 6): Promise<T> {
   const who = currentWho();
   if (!who) return fn();
-  const keys: [string, number][] = [
-    [`mk:busy:${who.sid ? "s:" + who.sid : "n1:" + who.ip}`, max],
-    [`mk:busy:n:${who.ip}`, network],
-  ];
-  const taken: string[] = [];
-  const release = async () => {
-    for (const k of taken) {
-      if (redis) await redis.decr(k).catch(() => undefined);
-      else localSeen.set(k, Math.max(0, (localSeen.get(k) || 1) - 1));
+  const keys = [`mk:jobs:${who.sid ? "s:" + who.sid : "n1:" + who.ip}`, `mk:jobs:n:${who.ip}`];
+  const limits = [max, network];
+  const token = crypto.randomUUID();
+  const busy = () => new SourceError("Another job from you is still running — wait for it to finish, then try again.", 429);
+  let shared = false;
+  if (redis) {
+    const r = redis;
+    const ok = await r.eval(SLOT_TAKE_LUA, keys, [String(Date.now()), String(SLOT_LEASE_MS), token, ...limits.map(String)]).catch(() => null);
+    if (ok !== null) {
+      if (Number(ok) !== 1) throw busy();
+      shared = true;
     }
-  };
-  try {
-    for (const [k, limit] of keys) {
-      let n: number;
-      if (redis) {
-        try {
-          n = await redis.incr(k);
-          await redis.expire(k, 90);
-        } catch {
-          continue;
-        }
-      } else n = (localSeen.get(k) || 0) + 1, localSeen.set(k, n);
-      taken.push(k);
-      if (n > limit) throw new SourceError("Another job from you is still running — wait for it to finish, then try again.", 429);
-    }
-  } catch (e) {
-    await release();
-    throw e;
+  }
+  if (!shared) {
+    const now = Date.now();
+    const sets = keys.map((k) => {
+      let m = localSlots.get(k);
+      if (!m) localSlots.set(k, (m = new Map()));
+      for (const [t, until] of m) if (until <= now) m.delete(t);
+      return m;
+    });
+    if (sets.some((m, i) => m.size >= limits[i])) throw busy();
+    sets.forEach((m) => m.set(token, now + SLOT_LEASE_MS));
+    if (localSlots.size > 20000) for (const [k, m] of localSlots) if (!m.size) localSlots.delete(k);
   }
   try {
     return await fn();
   } finally {
-    await release();
+    const r = redis;
+    if (shared && r) await outsideRequest(() => r.eval(SLOT_FREE_LUA, keys, [token])).catch(() => undefined);
+    else keys.forEach((k) => localSlots.get(k)?.delete(token));
   }
 }

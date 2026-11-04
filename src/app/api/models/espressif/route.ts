@@ -1,5 +1,5 @@
 import { identify } from "@/lib/maker/identify";
-import { noteResource } from "@/lib/maker/limits";
+import { admitFile, meteredStream } from "@/lib/maker/limits";
 import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { limitRoute } from "@/lib/maker/limits";
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ async function get(request: Request) {
   const limited = await limitRoute(request, "files");
   if (limited) return limited;
   try {
-    await noteResource("file", "esp3d:" + new URL(request.url).search);
+    await admitFile("esp3d:" + (new URL(request.url).searchParams.get("path") ?? ""));
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
   }
@@ -53,7 +53,7 @@ async function get(request: Request) {
     }
     const bytes = await boundedBody(response.body, 20 * 1024 * 1024);
     if (bytes.byteLength > 4 * 1024 * 1024) return redirect();
-    return new Response(bytes, {
+    return new Response(meteredStream(new Blob([bytes]).stream()), {
       headers: {
         "Content-Type": "application/octet-stream",
         "Cache-Control": "public, max-age=86400, s-maxage=604800",

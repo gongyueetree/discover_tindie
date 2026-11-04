@@ -126,6 +126,17 @@ async function main() {
   assert.match(await r.text(), /^\(footprint "EZ_LED_5050"/);
   r = await get("cad/p_ezezezezez/model");
   assert.equal(r.status, 404, "no model in ezPLM's library → 404 without asking partdata");
+  // Fourth audit F02: a part's details are counted per visitor, so never kept by the shared CDN
+  // (a CDN hit would skip the count); browsing lists still are.
+  r = await get("parts/p_ezezezezez");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("vercel-cdn-cache-control"), null, "detail: no shared CDN cache");
+  assert.match(r.headers.get("cache-control")!, /^private/, "detail: the visitor's own browser only");
+  r = await get("suppliers");
+  assert.match(r.headers.get("vercel-cdn-cache-control") || "", /max-age/, "lists stay CDN cached");
+  // F05: a malformed session cookie is no session, not a 500.
+  r = await GET(new NextRequest("http://localhost/api/maker/suppliers", { headers: { "x-forwarded-for": "203.0.113.9", cookie: "mk_sid=%" } }), { params: Promise.resolve({ path: ["suppliers"] }) });
+  assert.equal(r.status, 200, "bad mk_sid percent-encoding");
   // circuit-module graph: the module's most used families and their co-occurrence
   const { GET: graphGet } = await import("../src/app/api/maker/graph/route");
   r = await graphGet(new NextRequest("http://localhost/api/maker/graph?module=mcu", { headers: { "x-forwarded-for": "203.0.113.9" } }));

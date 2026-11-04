@@ -48,9 +48,31 @@ export function fetchSignal(maxMs: number): AbortSignal {
 /**
  * Signal for a call whose result other requests may share (in-flight / response caches): capped by
  * this request's deadline (never longer than `maxMs`), but not cancelled when this one client leaves,
- * so a visitor closing the tab does not fail another visitor waiting on the same answer.
+ * so a visitor closing the tab does not fail another visitor waiting on the same answer. Once the
+ * request's time is up the signal is already aborted: an expired request starts no new shared work.
+ * Only for results that really are shared — a call whose answer only this request uses (a file stream)
+ * takes fetchSignal, which the client leaving cancels.
  */
 export function sharedFetchSignal(maxMs: number): AbortSignal {
   const c = store.getStore();
-  return AbortSignal.timeout(Math.max(1_000, Math.min(maxMs, c ? c.deadline - Date.now() : maxMs)));
+  const ms = Math.min(maxMs, c ? c.deadline - Date.now() : maxMs);
+  if (ms <= 0) return AbortSignal.abort(new DOMException("The request's time is up", "TimeoutError"));
+  return AbortSignal.timeout(ms);
+}
+
+/**
+ * Signal for one Redis command (the Upstash client calls this per command): the request's time left,
+ * at most 3 s; already aborted once the time is up. Not tied to the client leaving. Bookkeeping that
+ * must finish even after the deadline (releasing a lock or a job lease) runs through `outsideRequest`.
+ */
+export function redisSignal(): AbortSignal {
+  const c = store.getStore();
+  const ms = Math.min(3_000, c ? c.deadline - Date.now() : 3_000);
+  if (ms <= 0) return AbortSignal.abort(new DOMException("The request's time is up", "TimeoutError"));
+  return AbortSignal.timeout(ms);
+}
+
+/** Run `fn` outside the current request's context (its own 3 s limits, not the request's deadline). */
+export function outsideRequest<T>(fn: () => T): T {
+  return store.exit(fn);
 }

@@ -1,5 +1,5 @@
 import { identify } from "@/lib/maker/identify";
-import { noteResource } from "@/lib/maker/limits";
+import { admitFile, meteredStream } from "@/lib/maker/limits";
 import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { limitRoute } from "@/lib/maker/limits";
 import { NextRequest } from "next/server";
@@ -54,7 +54,17 @@ async function get(req: NextRequest) {
   const limited = await limitRoute(req, "files");
   if (limited) return limited;
   try {
-    await noteResource("file", "datasheet:" + (req.nextUrl.searchParams.get("url") || ""));
+    // The datasheet's full URL (without a #fragment, which never changes the file) is its identity.
+    const raw = req.nextUrl.searchParams.get("url") || "";
+    let id = raw;
+    try {
+      const u = new URL(raw);
+      u.hash = "";
+      id = u.href;
+    } catch {
+      /* rejected below */
+    }
+    await admitFile("datasheet:" + id);
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
   }
@@ -93,7 +103,7 @@ async function get(req: NextRequest) {
         await cancel();
         throw Error("The source does not provide a readable PDF");
       }
-      return new Response(stream, {
+      return new Response(meteredStream(stream), {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": 'inline; filename="datasheet.pdf"',
