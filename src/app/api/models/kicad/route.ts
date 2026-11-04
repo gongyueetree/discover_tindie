@@ -1,7 +1,11 @@
+import { peekStream } from "@/lib/maker/stream-body";
+import { limitRoute } from "@/lib/maker/limits";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 // Public library assets only. No caller-provided hosts, redirects or credentials.
 export async function GET(request: Request) {
+  const limited = await limitRoute(request, "files");
+  if (limited) return limited;
   const params = new URL(request.url).searchParams,
     path = params.get("path") ?? "",
     revision = params.get("revision") ?? "master";
@@ -41,49 +45,34 @@ export async function GET(request: Request) {
       return new Response("Official KiCad model unavailable", {
         status: upstream?.status === 404 ? 404 : 502,
       });
-    const read = async (response: Response) => {
-      const reader = response.body?.getReader();
-      if (!reader) throw Error("empty");
-      const chunks: Uint8Array[] = [];
-      let length = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        length += value.length;
-        if (length > 20 * 1024 * 1024) {
-          await reader.cancel();
-          throw Error("Model too large");
-        }
-        chunks.push(value);
-      }
-      const bytes = new Uint8Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return bytes;
-    };
+    // Streamed through with a 20 MB cap (never buffered whole); the header must be STEP or VRML.
     const valid = (bytes: Uint8Array) => {
-      const header = new TextDecoder()
-        .decode(bytes.subarray(0, 80))
-        .trimStart();
-      return (
-        header.startsWith("ISO-10303-21;") || header.startsWith("#VRML V2.0")
-      );
+      const header = new TextDecoder().decode(bytes.subarray(0, 80)).trimStart();
+      return header.startsWith("ISO-10303-21;") || header.startsWith("#VRML V2.0");
     };
-    let bytes = await read(upstream);
-    if (!valid(bytes) && revision === "master" && !mirror) {
+    const MAX = 20 * 1024 * 1024;
+    if (Number(upstream.headers.get("content-length")) > MAX) {
+      await upstream.body?.cancel();
+      throw Error("Model too large");
+    }
+    let body = await peekStream(upstream.body, 80, MAX).catch((e) => {
+      throw Error(e instanceof Error && e.message === "too large" ? "Model too large" : "empty");
+    });
+    if (!valid(body.head) && revision === "master" && !mirror) {
+      await body.cancel();
       const fallback = await fetch(mirrorUrl, {
         signal: AbortSignal.timeout(9000),
         redirect: "error",
         next: { revalidate: 86400 },
       });
-      if (fallback.ok) bytes = await read(fallback);
+      if (!fallback.ok) return new Response("Official model payload invalid", { status: 502 });
+      body = await peekStream(fallback.body, 80, MAX);
     }
-    if (!valid(bytes))
+    if (!valid(body.head)) {
+      await body.cancel();
       return new Response("Official model payload invalid", { status: 502 });
-    return new Response(bytes, {
+    }
+    return new Response(body.stream, {
       headers: {
         "Content-Type": "application/octet-stream",
         "Cache-Control": "public, max-age=86400, s-maxage=604800",

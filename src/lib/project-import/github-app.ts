@@ -162,3 +162,40 @@ export function githubInstallUrl(state: string) {
   return url.toString();
 }
 
+
+/**
+ * Whether the GitHub user who just authorised the App can access this installation.
+ * GitHub's setup URL carries `installation_id` as a plain query parameter that anyone can change
+ * (https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url);
+ * the App's own credentials only prove the installation exists. With "Request user authorization
+ * (OAuth) during installation" enabled, the callback also gets a `code`: exchanged for a user token,
+ * it lists the installations that user can access. Without the OAuth client settings or a code this
+ * returns false, so the connection is refused.
+ */
+export async function userCanAccessInstallation(code: string, installationId: number): Promise<boolean> {
+  const clientId = process.env.GITHUB_APP_CLIENT_ID?.trim();
+  const clientSecret = process.env.GITHUB_APP_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret || !code || code.length > 200) return false;
+  const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }),
+    signal: AbortSignal.timeout(15000),
+    cache: "no-store",
+  });
+  const tokenJson = (await tokenRes.json().catch(() => ({}))) as { access_token?: string };
+  if (!tokenRes.ok || !tokenJson.access_token) return false;
+  for (let page = 1; page <= 5; page++) {
+    const r = await fetch(`https://api.github.com/user/installations?per_page=100&page=${page}`, {
+      headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${tokenJson.access_token}`, "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Tindie-Project-Import" },
+      signal: AbortSignal.timeout(15000),
+      cache: "no-store",
+    });
+    if (!r.ok) return false;
+    const d = (await r.json()) as { installations?: { id: number }[] };
+    const list = d.installations || [];
+    if (list.some((i) => i.id === installationId)) return true;
+    if (list.length < 100) break;
+  }
+  return false;
+}

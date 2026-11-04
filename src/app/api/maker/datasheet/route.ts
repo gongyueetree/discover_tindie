@@ -1,5 +1,6 @@
+import { limitRoute } from "@/lib/maker/limits";
 import { NextRequest } from "next/server";
-import { boundedBody } from "@/vendor/canon/lib/allegro-http";
+import { peekStream } from "@/lib/maker/stream-body";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -42,6 +43,8 @@ function allowed(u: URL) {
   );
 }
 export async function GET(req: NextRequest) {
+  const limited = await limitRoute(req, "files");
+  if (limited) return limited;
   try {
     let url = new URL(req.nextUrl.searchParams.get("url") || "");
     const signal = AbortSignal.timeout(25000);
@@ -71,10 +74,13 @@ export async function GET(req: NextRequest) {
         await r.body?.cancel();
         throw Error("Datasheet exceeds the 30 MB reading limit");
       }
-      const bytes = await boundedBody(r.body, 30 * 1024 * 1024);
-      if (!new TextDecoder().decode(bytes.subarray(0, 1024)).includes("%PDF-"))
+      // Streamed through (never buffered whole); the first 1 KB must look like a PDF.
+      const { head, stream, cancel } = await peekStream(r.body, 1024, 30 * 1024 * 1024);
+      if (!new TextDecoder().decode(head.subarray(0, 1024)).includes("%PDF-")) {
+        await cancel();
         throw Error("The source does not provide a readable PDF");
-      return new Response(bytes, {
+      }
+      return new Response(stream, {
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": 'inline; filename="datasheet.pdf"',

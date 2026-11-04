@@ -11,8 +11,10 @@ import {
   type GithubProject,
 } from "./github-projects";
 // Must be the same on every server instance (scan and import can hit different serverless instances).
-const secret =
-  process.env.MAKER_IMPORT_SECRET || process.env.AUTH_SECRET || randomBytes(32).toString("hex");
+// A random per-process key only for local development: in production a scan made on one instance and an
+// import served by another would not match, so there a configured secret is required (importGithub refuses).
+const configuredSecret = process.env.MAKER_IMPORT_SECRET || process.env.AUTH_SECRET || "";
+const secret = configuredSecret || randomBytes(32).toString("hex");
 type Snapshot = {
   repo: string;
   commit: string;
@@ -161,6 +163,8 @@ async function snapshot(value: string): Promise<Snapshot> {
   return s;
 }
 export function scanGithub(url: string) {
+  if (!configuredSecret && process.env.NODE_ENV === "production")
+    throw new SourceError("GitHub import is not configured on this server (set MAKER_IMPORT_SECRET or AUTH_SECRET).", 503);
   if (!/\/tree\/[0-9a-f]{40}(\/|$)/.test(url)) return scanFresh(url);
   const hit = pinnedScans.get(url);
   if (hit && hit.until > Date.now()) return hit.result;
@@ -296,7 +300,11 @@ export async function importGithub(selection: string, projectId: string) {
       queue.push(f.path);
   }
   const queued = new Set(queue);
+  // One deadline for the whole import (the function has 60 s): each file's own timeout is the rest of it.
+  const deadline = Date.now() + 45_000;
   while (queue.length) {
+    if (Date.now() > deadline)
+      throw new SourceError("GitHub was too slow to send this design. Please retry, or download the folder and open it locally.", 504);
     if (Object.keys(data).length >= 200)
       throw new SourceError(
         "Selected project exceeds the 200-file import limit.",
@@ -317,7 +325,7 @@ export async function importGithub(selection: string, projectId: string) {
     const r = await fetch(url, {
       headers: { "User-Agent": "Tindie-Maker-Tools" },
       redirect: "error",
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.timeout(Math.max(1000, Math.min(25000, deadline - Date.now()))),
     });
     if (!r.ok)
       throw new SourceError(`Unable to read selected file: ${path}`, 502);

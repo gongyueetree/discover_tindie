@@ -24,7 +24,7 @@ async function main() {
     console.log(`✓ Created new admin: ${email}`);
   }
   console.log(`  email:    ${email}`);
-  console.log(`  password: ${pass}`);
+  console.log("  password: (as set in SEED_ADMIN_PASSWORD; not shown)");
   process.exit(0);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

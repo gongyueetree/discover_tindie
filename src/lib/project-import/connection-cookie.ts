@@ -28,7 +28,8 @@ export function encodeConnections(github: GithubConnection[]) {
   const payload: ConnectionCookiePayload = { version: 1, github };
   const raw = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = signature(raw);
-  return sig ? `${raw}.${sig}` : raw;
+  // Without a signing secret no connection can be stored (an unsigned cookie would be forgeable).
+  return sig ? `${raw}.${sig}` : "";
 }
 
 export function decodeConnections(value: string | undefined | null): GithubConnection[] {
@@ -37,7 +38,9 @@ export function decodeConnections(value: string | undefined | null): GithubConne
     const [raw, sig] = value.split(".");
     if (!raw) return [];
     const expected = signature(raw);
-    if (expected) {
+    // No signing secret configured: accept nothing (fail closed).
+    if (!expected) return [];
+    {
       if (!sig) return [];
       const actualBuffer = Buffer.from(sig);
       const expectedBuffer = Buffer.from(expected);

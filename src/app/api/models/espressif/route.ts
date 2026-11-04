@@ -1,9 +1,12 @@
+import { limitRoute } from "@/lib/maker/limits";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 
 /** Only the manufacturer's public KiCad model directory; no user-supplied URL/host. */
 export async function GET(request: Request) {
+  const limited = await limitRoute(request, "files");
+  if (limited) return limited;
   const path = new URL(request.url).searchParams.get("path") ?? "";
   if (!/^[\w.+()-]+\.(step|stp|wrl)$/i.test(path))
     return new Response("Invalid model path", { status: 400 });
