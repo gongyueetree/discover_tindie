@@ -216,7 +216,7 @@ async function designPool(filter: DesignFilter, visitor: string) {
   );
   const out: DesignCard[] = [...firstItems, ...rest.flat()];
   const seen = new Set<string>();
-  return out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id));
+  return dedupeDesigns(out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id)));
 }
 
 export async function designsBy(filter: DesignFilter, offset: number, visitor: string, limit = 20) {
@@ -842,4 +842,33 @@ export async function comparePartsBy(ref: string, given: string[], family: strin
     ...compareParts(asCompare(original), candidates.map(asCompare)),
     unresolved: tokens.filter((_, i) => !found[i]).filter((t) => !/^p_/.test(t)),
   };
+}
+
+/**
+ * The parts database can hold one board twice: imported from its folder (greatscottgadgets/hackrf →
+ * hardware/hackrf-one) and from a project page that links the whole repository ("Opera Cake: …",
+ * same 99 parts, the repository's software licence). Open-source designs from the same repository
+ * with the same part count and CAD tool are the same files; keep the most specific record: one whose
+ * folder is named like the design, then any folder, then more stars.
+ */
+export function dedupeDesigns(designs: DesignCard[]): DesignCard[] {
+  const where = (d: DesignCard) => d.sourceUrl.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/tree\/[^/]+(?:\/(.+?))?)?\/?$/i);
+  const score = (d: DesignCard) => {
+    const folder = (where(d)?.[2] || "").split("/").pop()!.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const name = d.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return (folder && name.includes(folder) ? 4 : 0) + (folder ? 2 : 0);
+  };
+  const best = new Map<string, DesignCard>();
+  for (const d of designs) {
+    const repo = d.kind === "open_source" && d.partCount > 0 ? where(d)?.[1]?.toLowerCase() : null;
+    if (!repo) continue;
+    const key = `${repo}|${d.partCount}|${(d.edaTool || "").toLowerCase()}`;
+    const cur = best.get(key);
+    if (!cur || score(d) > score(cur) || (score(d) === score(cur) && (d.stars ?? 0) > (cur.stars ?? 0))) best.set(key, d);
+  }
+  const kept = new Set(best.values());
+  return designs.filter((d) => {
+    const repo = d.kind === "open_source" && d.partCount > 0 ? where(d)?.[1]?.toLowerCase() : null;
+    return !repo || kept.has(d);
+  });
 }

@@ -287,3 +287,8 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 
 - mlab-modules/STM32TQ6401 的 `doc/gen/STM32TQ6401.brd` 不是 EAGLE 板，而是另一种工具导出的 BRDOUT 文本（板框 + 网表），却排在第一个被默认选中，导入后提示「不支持」。现在排序优先真正的设计：有 `.kicad_pro`、原理图 + PCB 齐全的工程在前，`doc / gen / output / fab / gerber / production` 等输出目录里的放最后；分数相同时目录层级浅的（主板）在前。
 - 实测 KiCad 10 格式（版本 2026xxxx）的板子能正常解析，提示文字和「Supported CAD formats」改为 KiCad 5–10；解析失败时提示 .brd 不一定是 EAGLE，可换列表里的其他工程。
+
+## 19. 同一块板子的重复记录
+
+零件库里 hackrf-one 有两条记录：一条从仓库文件夹 `hardware/hackrf-one` 导入（许可 CERN-OHL-P，取自硬件文件夹），另一条来自引用整个仓库的项目页面（标题「Opera Cake: DOPPLER DIRECTION FINDING…」，BOM 取到的仍是 hackrf-one 的 99 个零件，许可是仓库的软件许可 GPL-2.0）。图片、零件数、星数相同，许可不同。
+`dedupeDesigns`（`src/lib/partdata/maker.ts`）：同一仓库、零件数和 EDA 工具都相同的开源设计视为同一份文件，只保留最具体的一条（文件夹名与设计名一致 > 有文件夹 > 星数多）。根源在零件库导入时没有按 BOM 去重，需要在 ezplm_partdata 侧清理。
