@@ -315,6 +315,7 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 **验证**：本环境连不上 GitHub 和 Claude API，整条流程用本地 Postgres + 模拟 GitHub + 模拟 Claude API 跑通（`scripts/design-picks-checks.ts` 覆盖纯逻辑）；真实效果需在预览上用后台按钮跑一次确认。
 
 补充：零件库还不支持按电路模块筛选时，模块列表由该模块最常见的几个器件族的设计拼成，原来只在每个器件族内部去重；同一块板子的两条记录分别从两个器件族进来时（hackrf-one 与 Opera Cake 那条），合并后的列表仍会出现两次。现在拼好之后再整体去重一次。
+
 ## 21. 上线前审计（2026-11-04）的修复
 
 对照 GPT 的审计报告逐条核实代码后修复（`scripts/prelaunch-audit-checks.ts`，全部用模拟上游验证）：
