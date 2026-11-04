@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import { analyzeGithubProject, analyzeProjectUrl } from "@/lib/project-import/agent";
 import { CONNECTION_COOKIE, decodeConnections } from "@/lib/project-import/connection-cookie";
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   let input: AnalyzeInput;
   try {
     input = (await request.json()) as AnalyzeInput;

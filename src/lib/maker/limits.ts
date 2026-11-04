@@ -66,52 +66,86 @@ export async function limitRequest(visitorKey: string, bucket: Bucket = "api") {
 
 export type Provider = "digikey" | "mouser";
 const day = () => new Date().toISOString().slice(0, 10);
+/** A budget from the environment; "0" means switched off (not "use the default"). */
+export function envBudget(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
 /** Site-wide calls per day (leave headroom under the account's real quota) and per visitor per day. */
-const SITE_DAILY: Record<Provider, number> = {
-  digikey: Number(process.env.DIGIKEY_DAILY_BUDGET) || 800,
-  mouser: Number(process.env.MOUSER_DAILY_BUDGET) || 800,
-};
-const VISITOR_DAILY = Number(process.env.SUPPLIER_VISITOR_DAILY_BUDGET) || 150;
+const siteDaily = (p: Provider) => envBudget(p === "digikey" ? "DIGIKEY_DAILY_BUDGET" : "MOUSER_DAILY_BUDGET", 800);
+const visitorDaily = () => envBudget("SUPPLIER_VISITOR_DAILY_BUDGET", 150);
+
+/**
+ * Paid calls need a ledger every instance shares. In production that is Redis; without it paid calls
+ * are refused (browsing, cached answers and local tools keep working). MAKER_LOCAL_BUDGET=1 allows a
+ * per-instance ledger explicitly (development, single-instance hosting); outside production it is the default.
+ */
+const localLedgerAllowed = () => process.env.MAKER_LOCAL_BUDGET === "1" || process.env.NODE_ENV !== "production";
+
+/**
+ * Atomic check-and-reserve: both budgets are checked first and both are charged only if both allow it.
+ * A refused request charges nothing (it is counted under a separate "denied" key for monitoring).
+ */
+const RESERVE_LUA = `
+local site = tonumber(redis.call('GET', KEYS[1]) or '0')
+local mine = tonumber(redis.call('GET', KEYS[2]) or '0')
+local amount = tonumber(ARGV[1])
+if site + amount > tonumber(ARGV[2]) or mine + amount > tonumber(ARGV[3]) then
+  redis.call('INCR', KEYS[3]); redis.call('EXPIRE', KEYS[3], 172800)
+  return 0
+end
+redis.call('INCRBY', KEYS[1], amount); redis.call('EXPIRE', KEYS[1], 172800)
+redis.call('INCRBY', KEYS[2], amount); redis.call('EXPIRE', KEYS[2], 172800)
+return 1`;
 
 const localSpend = new Map<string, number>();
 /**
  * Reserve `amount` units of a daily budget, site-wide and for this visitor, before spending them.
- * false = do not spend (over budget, or Redis configured but unreachable: fail closed).
- * Without Redis the budget is per server instance only.
+ * false = do not spend: over either budget, a budget of 0, Redis configured but failing, or no shared
+ * ledger in production. Nothing is charged when the answer is false.
  */
 export async function reserveDaily(name: string, visitorKey: string, amount: number, siteLimit: number, visitorLimit: number): Promise<boolean> {
+  if (amount <= 0) return true;
+  if (siteLimit <= 0 || visitorLimit <= 0) return false;
   const d = day();
   if (redis) {
     try {
-      const siteKey = `mk:budget:${name}:${d}`;
-      const mineKey = `mk:budget:${name}:${d}:${visitorKey}`;
-      const site = await redis.incrby(siteKey, amount);
-      if (site === amount) await redis.expire(siteKey, 2 * 86400);
-      const mine = await redis.incrby(mineKey, amount);
-      if (mine === amount) await redis.expire(mineKey, 2 * 86400);
-      return site <= siteLimit && mine <= visitorLimit;
+      const ok = await redis.eval(RESERVE_LUA, [`mk:budget:${name}:${d}`, `mk:budget:${name}:${d}:${visitorKey}`, `mk:denied:${name}:${d}`], [
+        String(amount),
+        String(siteLimit),
+        String(visitorLimit),
+      ]);
+      return Number(ok) === 1;
     } catch {
       return false; // fail closed: never spend paid quota without a working ledger
     }
   }
+  if (!localLedgerAllowed()) return false;
   const siteKey = `${name}:${d}`;
   const mineKey = `${name}:${d}:${visitorKey}`;
   if (localSpend.size > 20000) localSpend.clear();
-  const site = (localSpend.get(siteKey) || 0) + amount;
-  const mine = (localSpend.get(mineKey) || 0) + amount;
-  localSpend.set(siteKey, site);
-  localSpend.set(mineKey, mine);
-  return site <= siteLimit && mine <= visitorLimit;
+  const site = localSpend.get(siteKey) || 0;
+  const mine = localSpend.get(mineKey) || 0;
+  if (site + amount > siteLimit || mine + amount > visitorLimit) return false;
+  localSpend.set(siteKey, site + amount);
+  localSpend.set(mineKey, mine + amount);
+  return true;
 }
 
 /** Reserve one real call to a distributor for this visitor (see reserveDaily). */
 export function reserveSupplierCall(provider: Provider, visitorKey: string) {
-  return reserveDaily(provider, visitorKey, 1, SITE_DAILY[provider], VISITOR_DAILY);
+  return reserveDaily(provider, visitorKey, 1, siteDaily(provider), visitorDaily());
 }
 
-/** Machine-translation characters per day (Azure bills by character). */
-export function reserveTranslation(visitorKey: string, chars: number) {
-  return reserveDaily("translate", visitorKey, chars, Number(process.env.TRANSLATE_DAILY_CHARS) || 300_000, Number(process.env.TRANSLATE_VISITOR_DAILY_CHARS) || 30_000);
+/**
+ * Machine-translation characters per day (Azure bills the characters actually sent). `visitorKey` null =
+ * translation the server does on its own (part details, search results): only the site budget applies.
+ */
+export function reserveTranslation(visitorKey: string | null, chars: number) {
+  const site = envBudget("TRANSLATE_DAILY_CHARS", 300_000);
+  return reserveDaily("translate", visitorKey || "server", chars, site, visitorKey ? envBudget("TRANSLATE_VISITOR_DAILY_CHARS", 30_000) : site);
 }
 
 /** After a distributor answers 429: stop calling it for a while (Retry-After when given). */
@@ -138,36 +172,66 @@ export const supplierCacheKey = (provider: Provider, query: string) =>
 
 const memo = new Map<string, { until: number; value: unknown }>();
 const inflight = new Map<string, Promise<unknown>>();
-const TTL = Number(process.env.SUPPLIER_CACHE_SECONDS) || 3600;
+const TTL = envBudget("SUPPLIER_CACHE_SECONDS", 3600) || 3600;
+const RELEASE_LUA = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function fromRedis<T>(key: string): Promise<T | null> {
+  if (!redis) return null;
+  try {
+    const v = await redis.get<T>(key);
+    return v === null || v === undefined ? null : v;
+  } catch {
+    return null;
+  }
+}
 
 /**
- * Cached distributor answer: memory, then Redis, then `load` (one call per key at a time on this
- * instance). Only successful answers are cached; errors (429, auth, timeouts) are not stored as "no result".
+ * Cached distributor answer: memory, then Redis, then `load`. Identical lookups are merged on this
+ * instance (in-flight map) and across instances (a short Redis lock: the others wait for the cached
+ * answer; if the holder dies the lock expires and one of them loads). Only successful answers are
+ * cached; errors (429, auth, timeouts) are never stored as "no result".
  */
 export async function supplierCached<T>(key: string, load: () => Promise<T>): Promise<{ value: T; cached: boolean }> {
   const hit = memo.get(key);
   if (hit && hit.until > Date.now()) return { value: hit.value as T, cached: true };
-  if (redis) {
-    try {
-      const v = await redis.get<T>(key);
-      if (v !== null && v !== undefined) {
-        memo.set(key, { until: Date.now() + 60_000, value: v });
-        return { value: v, cached: true };
-      }
-    } catch {
-      /* cache unavailable: load below */
-    }
+  const stored = await fromRedis<T>(key);
+  if (stored !== null) {
+    memo.set(key, { until: Date.now() + 60_000, value: stored });
+    return { value: stored, cached: true };
   }
   const running = inflight.get(key) as Promise<T> | undefined;
   if (running) return { value: await running, cached: true };
-  const p = load();
+  const p = (async () => {
+    let owner: string | null = null;
+    if (redis) {
+      const token = Math.random().toString(36).slice(2);
+      try {
+        const got = await redis.set(`${key}:lock`, token, { nx: true, px: 20_000 });
+        if (got === "OK") owner = token;
+        else
+          for (let waited = 0; waited < 8_000; waited += 250) {
+            await sleep(250);
+            const v = await fromRedis<T>(key);
+            if (v !== null) return v;
+          }
+      } catch {
+        /* lock unavailable: load anyway (the paid budget still applies) */
+      }
+    }
+    try {
+      const value = await load();
+      if (memo.size > 5000) memo.clear();
+      memo.set(key, { until: Date.now() + TTL * 1000, value });
+      if (redis) await redis.set(key, value as any, { ex: TTL }).catch(() => undefined);
+      return value;
+    } finally {
+      if (redis && owner) await redis.eval(RELEASE_LUA, [`${key}:lock`], [owner]).catch(() => undefined);
+    }
+  })();
   inflight.set(key, p);
   try {
-    const value = await p;
-    if (memo.size > 5000) memo.clear();
-    memo.set(key, { until: Date.now() + TTL * 1000, value });
-    if (redis) void redis.set(key, value as any, { ex: TTL }).catch(() => undefined);
-    return { value, cached: false };
+    return { value: await p, cached: false };
   } finally {
     inflight.delete(key);
   }

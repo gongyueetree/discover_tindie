@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import { CONNECTION_STATE_COOKIE, createConnectionState } from "@/lib/project-import/connection-cookie";
 import { githubInstallUrl, isGithubAppConfigured } from "@/lib/project-import/github-app";
@@ -6,6 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   const fallback = new URL("/seller/import-project?github=not-configured", request.url);
   if (!isGithubAppConfigured()) return NextResponse.redirect(fallback);
 

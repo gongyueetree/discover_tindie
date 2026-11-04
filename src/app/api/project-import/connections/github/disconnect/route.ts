@@ -1,3 +1,4 @@
+import { projectImportDisabled } from "@/lib/project-import/enabled";
 import { NextRequest, NextResponse } from "next/server";
 import { CONNECTION_COOKIE, decodeConnections, encodeConnections } from "@/lib/project-import/connection-cookie";
 
@@ -5,6 +6,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
+  const off = projectImportDisabled();
+  if (off) return off;
   let installationId = 0;
   try {
     const body = (await request.json()) as { installationId?: number };
@@ -24,7 +27,7 @@ export async function POST(request: NextRequest) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 90,
+    maxAge: 60 * 60 * 24 * 30,
   });
   return response;
 }

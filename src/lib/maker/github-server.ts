@@ -266,6 +266,9 @@ async function scanFresh(url: string) {
   };
 }
 export async function importGithub(selection: string, projectId: string) {
+  // One deadline for the whole import, counted before the snapshot (a cold instance rebuilds it from
+  // GitHub) and leaving ~10 s of the 60 s function for compressing and sending the ZIP.
+  const deadline = Date.now() + 45_000;
   const s = await snapshot(selection),
     project = s.projects.find((p) => p.id === projectId);
   if (!project)
@@ -300,8 +303,6 @@ export async function importGithub(selection: string, projectId: string) {
       queue.push(f.path);
   }
   const queued = new Set(queue);
-  // One deadline for the whole import (the function has 60 s): each file's own timeout is the rest of it.
-  const deadline = Date.now() + 45_000;
   while (queue.length) {
     if (Date.now() > deadline)
       throw new SourceError("GitHub was too slow to send this design. Please retry, or download the folder and open it locally.", 504);
