@@ -1,5 +1,5 @@
 import "server-only";
-import { sharedFetchSignal } from "@/lib/maker/request-context";
+import { fetchSignal, sharedFetchSignal } from "@/lib/maker/request-context";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -270,7 +270,8 @@ export async function pdGetStream(path: string, max: number): Promise<{ type: st
     r = await fetch(BASE() + path, {
       cache: "no-store",
       redirect: "error",
-      signal: sharedFetchSignal(45000),
+      // This stream belongs to this one request: the visitor leaving cancels it (even before headers).
+      signal: fetchSignal(45000),
       headers: { "X-Api-Key": KEY(), "X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": signature(SECRET(), "GET", path, "", ts, nonce) },
     });
   } catch {

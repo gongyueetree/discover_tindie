@@ -4,7 +4,7 @@ import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable, git
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
 import { chunkStream, peekStream } from "@/lib/maker/stream-body";
-import { noteResource, withTaskSlot } from "@/lib/maker/limits";
+import { admitFile, meteredStream, noteResource, withTaskSlot } from "@/lib/maker/limits";
 import { identify } from "@/lib/maker/identify";
 import { matchRow } from "@/lib/maker/bom";
 import { visitorHash, pdGetRaw, pdGetStream, oneVisitorCharge } from "@/lib/partdata/client";
@@ -111,13 +111,15 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
       result = { part };
     } else if (req.method === "GET" && head === "cad" && path.length === 2 && PART_ID.test(a)) {
       // CAD drawn by eelib's preview engine from the official KiCad library entry partdata names.
+      // Shows the part's details (and its ezPLM files): counted like the part page.
+      await noteResource("detail", a);
       const part = await partDetail(a, visitor);
       const ez = part.ezplmLibrary ? { partId: a, ...part.ezplmLibrary } : null;
       result = { mpn: part.mpn, ...(await cadPreview(part.symbolName, part.footprintName, ez, part.mpn)) };
     } else if (req.method === "GET" && head === "cad" && path.length === 3 && PART_ID.test(a) && ["symbol", "footprint", "model"].includes(path[2])) {
       // A part's file from ezPLM's own library (partdata signs and meters the request).
       const kind = path[2] as "symbol" | "footprint" | "model";
-      await noteResource("file", `cad:${a}:${kind}`);
+      await admitFile(`cad:${a}:${kind}`);
       const part = await partDetail(a, visitor);
       if (!part.ezplmLibrary?.[kind]) throw new SourceError("ezPLM's library has no such file for this part.", 404);
       // Models (up to 15 MB) stream through with a byte cap; symbols and footprints are small text.
@@ -127,7 +129,8 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
           : await ezplmFile(a, kind);
       const name = ((kind === "symbol" ? part.symbolName : part.footprintName) || part.mpn).split(":").pop()!.replace(/[^\w.+-]/g, "_").slice(0, 80);
       const ext = { symbol: "kicad_sym", footprint: "kicad_mod", model: "step" }[kind];
-      return new Response(file.body as BodyInit, {
+      const out = kind === "model" ? meteredStream(file.body as ReadableStream<Uint8Array>) : (file.body as BodyInit);
+      return new Response(out, {
         headers: {
           "Content-Type": kind === "model" ? "model/step" : "text/plain; charset=utf-8",
           "Content-Disposition": `${kind === "model" ? "inline" : "attachment"}; filename="${name}.${ext}"`,
@@ -236,7 +239,7 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
       const hasDb = Boolean(process.env.APP_DATABASE_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL);
       result = { items: hasDb ? await (await import("@/lib/design-picks")).recentPicks().catch(() => []) : [] };
     } else if (req.method === "GET" && head === "easyeda-model" && path.length === 2 && /^[0-9a-f]{32}$/.test(a)) {
-      await noteResource("file", "easyeda:" + a);
+      await admitFile("easyeda:" + a);
       // A part's 3D model from EasyEDA's library (OBJ text, mm), as EasyEDA's own viewer loads it. The
       // project names it by id; the browser cannot fetch it cross-origin, so this route relays it.
       let r: Response;
@@ -256,7 +259,8 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
         await obj?.cancel();
         throw new SourceError("Unexpected model data from EasyEDA.", 502);
       }
-      return new Response(obj.stream, {
+      // Public EasyEDA library file: CDN cached, so only misses reach the counts above.
+      return new Response(meteredStream(obj.stream), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
@@ -329,9 +333,12 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
     if (req.method === "GET" && SHARED.test(path.join("/")) && !q.get("mpn") && !q.get("part") && !q.get("q")) {
       // Browsing lists are the same for every visitor: Vercel's CDN keeps them, so repeat views skip
       // this function and the parts database. Middleware (the preview gate) still runs first.
+      // Part and design details are NOT here: a CDN hit would skip their daily count (noteResource),
+      // so they are answered by this function every time (partdata's answers stay cached server-side).
       res.headers.set("Cache-Control", "public, max-age=60");
       res.headers.set("Vercel-CDN-Cache-Control", "max-age=300, stale-while-revalidate=86400");
-    } else res.headers.set("Cache-Control", "no-store");
+    } else if (req.method === "GET" && CONTROLLED.test(path.join("/"))) res.headers.set("Cache-Control", "private, max-age=300");
+    else res.headers.set("Cache-Control", "no-store");
     return res;
   } catch (e) {
     const err = asSourceError(e);
@@ -438,7 +445,9 @@ async function matchBomRows(rows: BomRow[], visitor: string, deadline: number): 
  * module or family, one design, one part, and knowledge-graph rankings. Searches (parts?q=, designs
  * by part number) are not shared: each counts as the visitor's own query.
  */
-const SHARED = /^(modules|suppliers|picks|circuits|circuits\/d_[a-z2-7]+(?:\/cover)?|parts\/p_[a-z2-7]+|families|discoveries\/\d+\/design)$/;
+const SHARED = /^(modules|suppliers|picks|circuits|circuits\/d_[a-z2-7]+\/cover|families|discoveries\/\d+\/design)$/;
+/** Counted per visitor (noteResource): only the visitor's own browser may keep them. */
+const CONTROLLED = /^(circuits\/d_[a-z2-7]+|parts\/p_[a-z2-7]+)$/;
 
 // Card pictures and README intros load by themselves as the visitor scrolls: never charged.
 const PASSIVE = /^circuits\/[^/]+\/(cover|about|usable|board\.svg)$|^discoveries\/\d+\/design$|^easyeda-model\/[0-9a-f]{32}$|^modules$|^suppliers$|^picks$|^kicad-symbols$|^translate$/;

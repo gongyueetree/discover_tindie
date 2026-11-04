@@ -7,6 +7,7 @@
  *  R07 connection cookies expire on the server
  */
 import assert from "node:assert/strict";
+import { luaRedis } from "./fixtures/lua-redis";
 
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.KV_REST_API_URL;
@@ -14,45 +15,17 @@ delete process.env.DIGIKEY_CLIENT_ID;
 process.env.MOUSER_API_KEY = "test-mouser";
 process.env.AZURE_TRANSLATOR_KEY = "test-azure";
 
-/** In-memory Redis with the commands limits.ts uses; eval runs the same logic as its Lua scripts. */
+/** In-memory Redis running limits.ts's real Lua scripts (fixtures/lua-redis); kv reads plain values. */
 function fakeRedis() {
-  const kv = new Map<string, any>();
-  const num = (k: string) => Number(kv.get(k) || 0);
+  const base = luaRedis();
   return {
-    kv,
-    async get(k: string) {
-      return kv.has(k) ? kv.get(k) : null;
-    },
-    async set(k: string, v: any, o: any = {}) {
-      if (o.nx && kv.has(k)) return null;
-      kv.set(k, v);
-      return "OK";
-    },
-    async incr(k: string) {
-      kv.set(k, num(k) + 1);
-      return num(k);
-    },
-    async incrby(k: string, n: number) {
-      kv.set(k, num(k) + n);
-      return num(k);
-    },
-    async expire() {
-      return 1;
-    },
-    async eval(script: string, keys: string[], args: string[]) {
-      if (script.includes("DEL")) {
-        if (kv.get(keys[0]) === args[0]) kv.delete(keys[0]);
-        return 1;
-      }
-      const [amount, siteLimit, mineLimit] = args.map(Number);
-      if (num(keys[0]) + amount > siteLimit || num(keys[1]) + amount > mineLimit) {
-        kv.set(keys[2], num(keys[2]) + 1);
-        return 0;
-      }
-      kv.set(keys[0], num(keys[0]) + amount);
-      kv.set(keys[1], num(keys[1]) + amount);
-      return 1;
-    },
+    kv: { get: (k: string) => base.kv.get(k)?.v, has: (k: string) => base.kv.has(k) },
+    get: (k: string) => base.get(k),
+    set: (k: string, v: any, o: any = {}) => base.set(k, v, o),
+    incr: (k: string) => base.incr(k),
+    incrby: (k: string, n: number) => base.incrby(k, n),
+    expire: (k: string, n: number) => base.expire(k, n),
+    eval: (script: string, keys: string[], args: string[]) => base.eval(script, keys, args),
   };
 }
 

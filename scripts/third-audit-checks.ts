@@ -8,6 +8,7 @@
  *      N concurrent jobs; paid budgets per session with a looser per-network cap
  */
 import assert from "node:assert/strict";
+import { luaRedis } from "./fixtures/lua-redis";
 
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.KV_REST_API_URL;
@@ -17,48 +18,23 @@ process.env.AUTH_SECRET = "a".repeat(40);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** In-memory Redis; eval runs the same logic as limits.ts's Lua scripts. */
+/** In-memory Redis running limits.ts's real Lua scripts (fixtures/lua-redis), with a slow GET / failing SET option. */
 function fakeRedis(opts: { getDelay?: number; failSet?: boolean } = {}) {
-  const kv = new Map<string, any>();
-  const num = (k: string) => Number(kv.get(k) || 0);
+  const base = luaRedis();
   return {
-    kv,
+    kv: { has: (k: string) => base.kv.has(k) },
     async get(k: string) {
       if (opts.getDelay) await sleep(opts.getDelay);
-      return kv.has(k) ? kv.get(k) : null;
+      return base.get(k);
     },
     async set(k: string, v: any, o: any = {}) {
       if (opts.failSet) throw Error("redis down");
-      if (o.nx && kv.has(k)) return null;
-      kv.set(k, v);
-      return "OK";
+      return base.set(k, v, o);
     },
-    async incr(k: string) {
-      kv.set(k, num(k) + 1);
-      return num(k);
-    },
-    async decr(k: string) {
-      kv.set(k, num(k) - 1);
-      return num(k);
-    },
-    async expire() {
-      return 1;
-    },
-    async eval(script: string, keys: string[], args: string[]) {
-      if (script.includes("DEL")) {
-        if (kv.get(keys[0]) === args[0]) kv.delete(keys[0]);
-        return 1;
-      }
-      const amount = Number(args[0]);
-      const n = keys.length - 1;
-      for (let i = 0; i < n; i++)
-        if (num(keys[i]) + amount > Number(args[i + 1])) {
-          kv.set(keys[n], num(keys[n]) + 1);
-          return 0;
-        }
-      for (let i = 0; i < n; i++) kv.set(keys[i], num(keys[i]) + amount);
-      return 1;
-    },
+    incr: (k: string) => base.incr(k),
+    incrby: (k: string, n: number) => base.incrby(k, n),
+    expire: (k: string, n: number) => base.expire(k, n),
+    eval: (script: string, keys: string[], args: string[]) => base.eval(script, keys, args),
   };
 }
 

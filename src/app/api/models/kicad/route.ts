@@ -1,5 +1,5 @@
 import { identify } from "@/lib/maker/identify";
-import { noteResource } from "@/lib/maker/limits";
+import { admitFile, meteredStream } from "@/lib/maker/limits";
 import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
 import { peekStream } from "@/lib/maker/stream-body";
 import { limitRoute } from "@/lib/maker/limits";
@@ -15,7 +15,8 @@ async function get(request: Request) {
   const limited = await limitRoute(request, "files");
   if (limited) return limited;
   try {
-    await noteResource("file", "kicad3d:" + (new URL(request.url).searchParams.get("path") || ""));
+    const sp = new URL(request.url).searchParams;
+    await admitFile(`kicad3d:${sp.get("revision") ?? "master"}:${sp.get("path") || ""}`);
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "Too many requests." }, { status: 429 });
   }
@@ -85,7 +86,8 @@ async function get(request: Request) {
       await body.cancel();
       return new Response("Official model payload invalid", { status: 502 });
     }
-    return new Response(body.stream, {
+    // Public KiCad library file: the CDN may keep it (s-maxage), so only misses reach this count.
+    return new Response(meteredStream(body.stream), {
       headers: {
         "Content-Type": "application/octet-stream",
         "Cache-Control": "public, max-age=86400, s-maxage=604800",

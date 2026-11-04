@@ -1,6 +1,7 @@
 import { identify } from "@/lib/maker/identify";
 import { fetchSignal, withRequestDeadline } from "@/lib/maker/request-context";
-import { limitRoute } from "@/lib/maker/limits";
+import { limitRoute, noteResource } from "@/lib/maker/limits";
+import { SourceError } from "@/lib/maker/server";
 import { NextRequest, NextResponse } from "next/server";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 import { visitorHash, oneVisitorCharge } from "@/lib/partdata/client";
@@ -50,11 +51,15 @@ async function library(req: NextRequest) {
         if (!exact) throw Error(`${mpn} is not in the Tindie parts database`);
         id = exact.id;
       }
+      // A part's footprint: counted like its page, and an ezPLM file under the same identity as
+      // /api/maker/cad/{id}/footprint (one file, one count, whichever way it is opened).
+      await noteResource("detail", id);
       const part = await partDetail(id, visitor);
       const fp = resolveName("footprint", part.footprintName);
       if (!part.footprintName) throw Error(`No footprint is recorded for ${part.mpn}`);
       if (!fp && part.ezplmLibrary?.footprint) {
         // Not in the official KiCad library: ezPLM's own library has it.
+        await noteResource("file", `cad:${id}:footprint`);
         const name = part.footprintName.split(":").pop()!;
         const text = await ezplmText(id, "footprint").catch(() => {
           throw Error(`The footprint ${part.footprintName} is listed in ezPLM's library, but its file could not be downloaded right now.`);
@@ -119,6 +124,7 @@ async function library(req: NextRequest) {
       .sort();
     return NextResponse.json({ names, library: lib, revision: REV });
   } catch (e) {
+    if (e instanceof SourceError && e.status === 429) return NextResponse.json({ error: e.message }, { status: 429 });
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },
       { status: 502 },

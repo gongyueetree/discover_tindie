@@ -10,7 +10,8 @@ import "server-only";
  * returned, as one legacy library. Library files are cached in memory and by the CDN.
  */
 import { SourceError } from "./server";
-import { sharedFetchSignal } from "./request-context";
+import { remainingMs, sharedFetchSignal } from "./request-context";
+import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 
 const SOURCES = {
   4: (lib: string) => `https://raw.githubusercontent.com/KiCad/kicad-library/4.0.7/library/${encodeURIComponent(lib)}.lib`,
@@ -27,9 +28,14 @@ function libraryText(version: 4 | 5, lib: string): Promise<string | null> {
       const r = await fetch(SOURCES[version](lib), { redirect: "error", signal: sharedFetchSignal(20_000), next: { revalidate: 604800 } } as RequestInit);
       if (r.status === 404) return null; // not a standard library (a project's own, or a typo)
       if (!r.ok) throw new SourceError("KiCad's symbol library is unavailable right now.", 502);
-      if (Number(r.headers.get("content-length") || 0) > MAX_LIB) return null;
-      const text = await r.text();
-      return text.length <= MAX_LIB && text.startsWith("EESchema-LIBRARY") ? text : null;
+      if (Number(r.headers.get("content-length") || 0) > MAX_LIB) {
+        await r.body?.cancel().catch(() => undefined);
+        return null;
+      }
+      // Read with a real byte cap (Content-Length may be absent or wrong).
+      const bytes = await boundedBody(r.body, MAX_LIB).catch(() => null);
+      const text = bytes ? new TextDecoder().decode(bytes) : "";
+      return text.startsWith("EESchema-LIBRARY") ? text : null;
     })();
     if (libraries.size > 200) libraries.clear();
     libraries.set(key, p);
@@ -58,10 +64,14 @@ export async function legacyStandardSymbols(version: 4 | 5, libs: string[], name
   const found = new Map<string, string>();
   const lowerWanted = new Map(names.map((n) => [n.toLowerCase(), n]));
   const loose: { lower: string; body: string; name: string }[] = [];
+  let read = 0;
   for (const lib of libs) {
     if (found.size === wanted.size) break;
+    // No new library download once the request's time is (nearly) up, and at most 12 MB read in all.
+    if (remainingMs() < 1_000 || read > 4 * MAX_LIB) break;
     const text = await libraryText(version, lib).catch(() => null);
     if (!text) continue;
+    read += text.length;
     for (const b of blocks(text)) {
       for (const n of [b.name, ...b.aliases]) if (wanted.has(n) && !found.has(n)) found.set(n, b.body);
       const lower = b.name.toLowerCase();
