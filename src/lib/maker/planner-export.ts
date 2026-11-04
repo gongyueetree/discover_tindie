@@ -139,7 +139,11 @@ export function shiftBoard(source: string, dx: number, dy: number) {
   return out;
 }
 
-export function plannerPcb(d: CircuitCanvasDocument) {
+/**
+ * The board as KiCad text. `onSheet` (the downloaded file) centres the board on the A4 drawing
+ * sheet; the in-page 3D preview uses board coordinates (corner at 0,0) so its camera frames it.
+ */
+export function plannerPcb(d: CircuitCanvasDocument, { onSheet = false }: { onSheet?: boolean } = {}) {
   const base = buildKicadPcb(d);
   const root = rootExpression(parseSExpression(base))!;
   const fps = root.items.filter(
@@ -157,6 +161,7 @@ export function plannerPcb(d: CircuitCanvasDocument) {
   }
   // Coordinates start at the board corner (0,0); KiCad would draw the board over the sheet's
   // top-left corner, so place it in the middle of the A4 sheet instead.
+  if (!onSheet) return out;
   const o = pageOffset(d.board.widthMm, d.board.heightMm);
   return shiftBoard(out, o.x, o.y);
 }

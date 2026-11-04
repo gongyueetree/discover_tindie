@@ -138,9 +138,19 @@ export default function Viewer({
       if (!scanRes.ok) throw Error(scan.error || "GitHub scan failed");
       const sub = String(d.github.subdir || "").replace(/\/$/, "");
       const projects: GithubProject[] = scan.projects || [];
+      // Several projects can sit under the pinned folder (hardware/pcb → distro-v2, distro-v3.1). The design's
+      // name ends with the project it describes ("sesame-robot - distro-v3.1"): prefer that one, never just the first.
+      const label = (d.design.name.includes(" - ") ? d.design.name.split(" - ").pop()! : "").trim().toLowerCase();
+      const under = projects.filter((p) => !sub || p.directory === sub || p.directory.startsWith(sub + "/"));
+      const named = (p: GithubProject) =>
+        !!label && (p.directory.split("/").pop()!.toLowerCase() === label || p.name.toLowerCase() === label);
       const choice =
-        projects.find((p) => p.directory === sub) ||
-        projects.find((p) => sub && p.directory.startsWith(sub + "/")) ||
+        under.find((p) => p.directory === sub && (!label || named(p))) ||
+        under.find(named) ||
+        projects.find(named) ||
+        under.find((p) => p.directory === sub) ||
+        under.find((p) => p.recommended) ||
+        under[0] ||
         projects.find((p) => p.recommended) ||
         projects[0];
       if (!choice) throw Error("No KiCad, EAGLE, Altium or EasyEDA / JLCEDA project found at the pinned source.");
