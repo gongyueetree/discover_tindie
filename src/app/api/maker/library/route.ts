@@ -1,3 +1,4 @@
+import { limitRoute } from "@/lib/maker/limits";
 import { NextRequest, NextResponse } from "next/server";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 import { visitorHash, oneVisitorCharge } from "@/lib/partdata/client";
@@ -28,6 +29,8 @@ export function GET(req: NextRequest) {
 }
 
 async function library(req: NextRequest) {
+  const limited = await limitRoute(req, "files");
+  if (limited) return limited;
   try {
     const q = req.nextUrl.searchParams;
     const kind = q.get("kind");

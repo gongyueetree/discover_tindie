@@ -5,7 +5,7 @@ import {
   decodeConnections,
   encodeConnections,
 } from "@/lib/project-import/connection-cookie";
-import { getGithubInstallationConnection, isGithubAppConfigured } from "@/lib/project-import/github-app";
+import { getGithubInstallationConnection, isGithubAppConfigured, userCanAccessInstallation } from "@/lib/project-import/github-app";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +32,12 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // The installation id in the URL can be anyone's: only connect it if the GitHub user who just
+    // authorised the App can access it (user OAuth during installation must be enabled on the App).
+    if (!(await userCanAccessInstallation(request.nextUrl.searchParams.get("code") || "", installationId))) {
+      target.searchParams.set("github", "installation-unverified");
+      return NextResponse.redirect(target);
+    }
     const connection = await getGithubInstallationConnection(installationId);
     const current = decodeConnections(request.cookies.get(CONNECTION_COOKIE)?.value);
     const next = [connection, ...current.filter((item) => item.installationId !== installationId)].slice(0, 12);

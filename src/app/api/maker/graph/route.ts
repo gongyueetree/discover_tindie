@@ -19,7 +19,7 @@ export function GET(req: NextRequest) {
 async function graph(req: NextRequest) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.ip || "local";
   try {
-    rateLimit(ip);
+    await rateLimit(ip);
     const focus = (req.nextUrl.searchParams.get("mpn") || "").trim();
     if (focus.length > 120) return NextResponse.json({ error: "Part number too long" }, { status: 400 });
     const module = (req.nextUrl.searchParams.get("module") || "").trim();

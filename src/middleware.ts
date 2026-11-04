@@ -6,6 +6,19 @@ export default auth((req) => {
   const { pathname } = req.nextUrl;
   const role = (req.auth?.user as { role?: string } | undefined)?.role;
 
+  // The legacy seller project import (private repositories via a GitHub App, AI analysis) is not part of
+  // the Discover site: off unless PROJECT_IMPORT_ENABLED=1. The Open hardware GitHub import
+  // (/api/maker/github/*) is separate and public-repository only.
+  if (pathname.startsWith("/api/project-import") || pathname.startsWith("/seller/import-project") || pathname === "/import-project") {
+    if (process.env.PROJECT_IMPORT_ENABLED !== "1") {
+      if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+  }
+
   // New Discover tabs: hidden from the public until MAKER_TOOLS_PUBLIC=1 (see lib/maker/visibility.ts).
   if (pathname === "/tools/preview") {
     const key = req.nextUrl.searchParams.get("key");
@@ -45,6 +58,6 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/admin/:path*", "/api/admin/:path*", "/tools/:path*", "/api/maker/:path*", "/api/models/:path*"],
+  matcher: ["/admin/:path*", "/api/admin/:path*", "/api/project-import/:path*", "/seller/import-project/:path*", "/import-project", "/tools/:path*", "/api/maker/:path*", "/api/models/:path*"],
 };
 

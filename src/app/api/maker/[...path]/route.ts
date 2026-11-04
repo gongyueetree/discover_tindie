@@ -2,6 +2,8 @@ import { translateTexts, englishParts } from "@/lib/maker/translation";
 import { scanGithub, importGithub, githubReadme, githubRepoOf, githubUsable, githubFolderImage } from "@/lib/maker/github-server";
 import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
+import { reserveTranslation } from "@/lib/maker/limits";
+import { chunkStream } from "@/lib/maker/stream-body";
 import { matchRow } from "@/lib/maker/bom";
 import { visitorHash, pdGetRaw, oneVisitorCharge } from "@/lib/partdata/client";
 import { cadPreview, ezplmFile } from "@/lib/partdata/kicad-lib";
@@ -55,27 +57,31 @@ async function handle(req: NextRequest, { params }: { params: { path: string[] }
   const [head, a] = path;
   let result: any;
   try {
-    rateLimit(ip);
+    await rateLimit(ip);
     /* ---------------------------------------------------------------- utilities */
     if (req.method === "POST" && head === "translate" && path.length === 1) {
-      const body = await jsonBody(req, 100000);
+      // BOM descriptions only (Chinese text is machine-translated; everything else is returned as is).
+      await rateLimit(ip, "translate");
+      const body = await jsonBody(req, 30000);
       if (
         !Array.isArray(body.texts) ||
         body.texts.length > 100 ||
-        body.texts.some((s: unknown) => typeof s !== "string" || s.length > 4000)
+        body.texts.some((s: unknown) => typeof s !== "string" || s.length > 500)
       )
         throw new SourceError("Invalid translation text list.", 400);
-      result = { texts: await translateTexts(body.texts) };
+      result = { texts: await translateTexts(body.texts, (chars) => reserveTranslation(visitor, chars)) };
     } else if (req.method === "POST" && head === "github" && path.length === 2) {
       const body = await jsonBody(req, 5000);
       if (a === "scan") {
         if (typeof body.url !== "string" || body.url.length > 1000) throw new SourceError("Invalid GitHub URL.", 400);
+        await rateLimit(ip, "github");
         result = await scanGithub(body.url);
       } else if (a === "import") {
         if (typeof body.token !== "string" || typeof body.project !== "string")
           throw new SourceError("Select a project first.", 400);
+        await rateLimit(ip, "github");
         const archive = await importGithub(body.token, body.project);
-        return new Response(archive.bytes, {
+        return new Response(chunkStream(archive.bytes), {
           headers: {
             "Content-Type": "application/zip",
             "Content-Disposition": `attachment; filename="${archive.name.replace(/[^a-zA-Z0-9._-]/g, "_")}"`,
@@ -304,6 +310,7 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
   const sources = [{ source: "Tindie parts database", status: "ready" as const }];
   let lines: Awaited<ReturnType<typeof matchLines>> = [];
   let partdataError = "";
+  let quotaExceeded = false;
   const askable = rows.filter((r) => keyword(r).replace(/[^A-Za-z0-9]/g, "").length >= 3);
   if (askable.length)
     try {
@@ -312,10 +319,16 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
         visitor,
       );
     } catch (e) {
-      partdataError = asSourceError(e).message;
+      const err = asSourceError(e);
+      partdataError = err.message;
+      // Over the visitor's daily lookup quota: do not turn the rest into paid distributor searches.
+      quotaExceeded = err.status === 429;
     }
   const byRef = new Map(lines.map((l) => [l.ref, l]));
   const out: BomRow[] = [];
+  // Distributor fallback: each distinct keyword once per request, within a time budget for the whole batch.
+  const lookups = new Map<string, ReturnType<typeof search>>();
+  const deadline = Date.now() + 35_000;
   for (const row of rows) {
     const line = byRef.get(row.id);
     const st = partdataError
@@ -352,8 +365,18 @@ async function matchBomRows(rows: BomRow[], visitor: string): Promise<BomRow[]> 
       out.push({ ...row, status: "unmatched", reason: "No searchable part number or specification.", sources: st });
       continue;
     }
+    if (quotaExceeded) {
+      out.push({ ...row, status: "unmatched", reason: "Daily lookup limit reached — try again tomorrow, or enter the part by hand.", sources: st });
+      continue;
+    }
+    if (Date.now() > deadline && !lookups.has(kw.toUpperCase())) {
+      out.push({ ...row, status: "unmatched", reason: "Distributor lookup skipped to keep this batch fast — retry this row.", sources: st });
+      continue;
+    }
     try {
-      const s = await search(kw, visitor, true, { partdata: false });
+      let pending = lookups.get(kw.toUpperCase());
+      if (!pending) lookups.set(kw.toUpperCase(), (pending = search(kw, visitor, true, { partdata: false })));
+      const s = await pending;
       const others = s.items.filter((p) => p.source !== "Tindie parts database");
       out.push({ ...matchRow(row, others), sources: [...st, ...s.sources.filter((x) => x.source !== "Tindie parts database")] });
     } catch {

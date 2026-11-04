@@ -4,12 +4,15 @@ import { hasChinese, terminology } from "./english";
 import type { Part } from "./types";
 const cache = new Map<string, string>();
 /** Optional standard Azure Translator v3 (NMT), never a generative/LLM endpoint. */
-export async function translateTexts(texts: string[]): Promise<string[]> {
+export async function translateTexts(texts: string[], reserve?: (chars: number) => Promise<boolean>): Promise<string[]> {
   const unique = [...new Set(texts.filter(hasChinese))];
   const pending = unique.filter(
     (t) => !cache.has(t) && hasChinese(terminology(t)),
   );
-  if (process.env.AZURE_TRANSLATOR_KEY && pending.length) {
+  // Paid characters are reserved first; over budget, the glossary translation below is used instead.
+  const allowed =
+    !!process.env.AZURE_TRANSLATOR_KEY && pending.length > 0 && (!reserve || (await reserve(pending.reduce((n, t) => n + t.length, 0))));
+  if (allowed) {
     for (let i = 0; i < pending.length; i += 40) {
       const batch = pending.slice(i, i + 40);
       try {
@@ -34,7 +37,7 @@ export async function translateTexts(texts: string[]): Promise<string[]> {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Ocp-Apim-Subscription-Key": process.env.AZURE_TRANSLATOR_KEY,
+              "Ocp-Apim-Subscription-Key": process.env.AZURE_TRANSLATOR_KEY || "",
               ...(process.env.AZURE_TRANSLATOR_REGION
                 ? {
                     "Ocp-Apim-Subscription-Region":

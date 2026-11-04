@@ -23,6 +23,7 @@ async function githubJson<T>(path: string, token?: string): Promise<T> {
   const response = await fetch(`${GITHUB_API}${path}`, {
     headers: githubHeaders("application/vnd.github+json", token),
     cache: "no-store",
+    signal: AbortSignal.timeout(20000),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -35,6 +36,7 @@ async function githubText(path: string, token?: string): Promise<string> {
   const response = await fetch(`${GITHUB_API}${path}`, {
     headers: githubHeaders("application/vnd.github.raw+json", token),
     cache: "no-store",
+    signal: AbortSignal.timeout(20000),
   });
   if (!response.ok) return "";
   return response.text();
@@ -97,6 +99,9 @@ export async function listGithubRepositories(owner: string, search = "", token?:
 
   const q = search.trim().toLowerCase();
   return repos
+    // Public mode uses the deployment's token: never show a repository only that token can read.
+    // (Connected-installation listings use listGithubInstallationRepositories, not this function.)
+    .filter((repo) => !repo.private)
     .filter((repo) => {
       if (!q) return true;
       return `${repo.name} ${repo.description ?? ""}`.toLowerCase().includes(q);
@@ -121,6 +126,10 @@ export async function loadGithubProject(owner: string, repo: string, token?: str
   const safeOwner = encodeURIComponent(owner.trim());
   const safeRepo = encodeURIComponent(repo.trim());
   const metadata = await githubJson<GithubRepo>(`/repos/${safeOwner}/${safeRepo}`, token);
+  // Only a connected installation's own token (passed in, or set with withGithubAccessToken) may read a
+  // private repository. The deployment-wide GITHUB_TOKEN serves public projects only.
+  if (metadata.private && !token && !githubTokenContext.getStore())
+    throw new Error("GitHub API 404: this repository is not public. Connect the GitHub account that owns it.");
   const readme = await githubText(`/repos/${safeOwner}/${safeRepo}/readme`, token);
 
   let files: Array<{ path: string; type: "blob" | "tree"; size?: number }> = [];

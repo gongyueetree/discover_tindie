@@ -14,12 +14,17 @@ async function main() {
   console.log("Seeding database…");
 
   // --- users ---
+  // No default password: an admin is created only with an explicit, strong SEED_ADMIN_PASSWORD.
   const adminEmail = process.env.SEED_ADMIN_EMAIL || "admin@tindie.test";
-  const adminPass = process.env.SEED_ADMIN_PASSWORD || "changeme123";
+  const adminPass = process.env.SEED_ADMIN_PASSWORD || "";
+  if (adminPass.length < 12) {
+    console.error("Set SEED_ADMIN_PASSWORD (12+ characters) to create the admin user.");
+    process.exit(1);
+  }
   const hash = await bcrypt.hash(adminPass, 10);
   await db.insert(schema.users).values({ email: adminEmail, name: "Admin", role: "admin", passwordHash: hash })
     .onConflictDoNothing();
-  console.log(`  ✓ admin user: ${adminEmail} (password: ${adminPass})`);
+  console.log(`  ✓ admin user: ${adminEmail} (password not shown)`);
 
   // --- resources ---
   for (const r of SEED_RESOURCES) {

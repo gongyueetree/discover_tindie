@@ -315,3 +315,24 @@ EasyEDA（标准版）板子在 3D 里原来只有一块绿板：解析器保留
 **验证**：本环境连不上 GitHub 和 Claude API，整条流程用本地 Postgres + 模拟 GitHub + 模拟 Claude API 跑通（`scripts/design-picks-checks.ts` 覆盖纯逻辑）；真实效果需在预览上用后台按钮跑一次确认。
 
 补充：零件库还不支持按电路模块筛选时，模块列表由该模块最常见的几个器件族的设计拼成，原来只在每个器件族内部去重；同一块板子的两条记录分别从两个器件族进来时（hackrf-one 与 Opera Cake 那条），合并后的列表仍会出现两次。现在拼好之后再整体去重一次。
+
+## 21. 上线前审计（2026-11-04）的修复
+
+对照 GPT 的审计报告逐条核实代码后修复（`scripts/prelaunch-audit-checks.ts`，全部用模拟上游验证）：
+
+| 编号 | 核实结果 | 修复 |
+|---|---|---|
+| A01 旧导入接口读私有仓库 | 属实（配了能读私有库的 `GITHUB_TOKEN` 时） | 旧卖家导入（`/seller/import-project`、`/api/project-import/*`）默认关闭，`PROJECT_IMPORT_ENABLED=1` 才开放；开放时公开模式也不列出私有仓库，用全站 token 读到私有仓库立即拒绝（不再读 README / 文件树）。Open hardware 的 GitHub 导入（`/api/maker/github/*`）本来就只收公开仓库，不受影响 |
+| A02 安装回调未验证归属 | 属实 | 回调用 GitHub 返回的 `code` 换用户 token，确认该用户能访问这个 installation 才连接；没有 `code` 或未配 OAuth 一律拒绝（需在 GitHub App 上开启安装时请求用户授权） |
+| A03 限流 | 属实 | 新的 `src/lib/maker/limits.ts`：配了 Upstash Redis 时跨实例共享计数，否则按实例；数据手册、器件库、3D 模型路由也纳入（每分钟 240 次，一块板要加载很多模型） |
+| A04 BOM 放大 | 属实 | partdata 返回 429（访客额度用完）时不再改查分销商；同一请求里相同型号只查一次；分销商回落有 35 秒总时限 |
+| A05 缓存 | 属实 | 分销商结果共享缓存（Redis + 内存，默认 1 小时，只缓存成功结果），同时到达的相同查询合并成一次；每次真实调用前预留全站 / 访客每日额度（Redis 出错时拒绝付费调用）；收到 429 后该分销商冷却 |
+| A06 翻译费用 | 部分属实（只翻中文） | 翻译单独限流（每分钟 20 次）、单条 ≤500 字、按字符预留每日额度，超出时用术语表翻译；旧 AI 分析随旧导入关闭 |
+| A07 大文件 | 属实 | 数据手册、KiCad 3D 模型改为流式转发（带字节上限，不整体读入内存）；GitHub 导入的 ZIP 分块发送。**4.5 MB 以上的文件需在 Vercel 预览上实测** |
+| A08 长任务 | 属实 | GitHub 导入整体 45 秒期限；BOM 分销商回落 35 秒期限 |
+| A09 旧 URL 导入重定向 | 代码属实 | 随旧导入默认关闭 |
+| A11 | 属实 | 连接 Cookie 没有签名密钥时一律拒绝；`db:seed` 不再有默认管理员密码、不打印密码，`reset-admin` 不打印密码；后台页和 `/api/admin/partdata` 在服务端再查权限，且角色从数据库实时读取（撤销编辑权限立即生效）；生产环境缺 `MAKER_IMPORT_SECRET` / `AUTH_SECRET` 时 GitHub 导入直接报未配置 |
+
+**未在本轮处理（需要单独安排）**：A10 Next.js 14 → 受支持版本的升级（牵涉 React / Auth.js，需完整回归）；A12 CAD 解析移到 Worker；匿名会话令牌 + 人机验证；partdata 侧按操作计量。
+
+**上线前需要在 Vercel 确认**：配置 Upstash Redis（否则限额只按实例）；`DIGIKEY_DAILY_BUDGET` / `MOUSER_DAILY_BUDGET` 按实际配额设置；若用过 `db:seed` 的默认密码 `changeme123`，修改该账号密码；`PROJECT_IMPORT_ENABLED` 保持不设。
