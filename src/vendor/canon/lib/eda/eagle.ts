@@ -52,6 +52,38 @@ export function isEagleBinary(path: string, bytes: Uint8Array): boolean {
   return head.includes(0) || head.some((byte) => byte < 0x09);
 }
 
+/**
+ * A Fusion Electronics `<spline degree knots>` with `<vertex>` control points, sampled along
+ * its length (Cox–de Boor). A rational spline, or one whose knots do not fit, is drawn through
+ * its control points (local addition: ../../NOTICE.md).
+ */
+export function splinePoints(item: XmlElement): XY[] {
+  const control = children(item, "vertex").map((v): XY => [num(v.attrs.x), num(v.attrs.y)]);
+  const degree = num(item.attrs.degree, 3);
+  const knots = (item.attrs.knots ?? "").trim().split(/\s+/).filter(Boolean).map(Number);
+  if (control.length < 2 || item.attrs.rational === "yes" || knots.length !== control.length + degree + 1 || knots.some((k) => !Number.isFinite(k))) return control;
+  const basis = (i: number, p: number, u: number): number => {
+    if (p === 0) return (knots[i] <= u && u < knots[i + 1]) || (u === knots[knots.length - degree - 1] && knots[i] < u && u <= knots[i + 1]) ? 1 : 0;
+    const left = knots[i + p] - knots[i], right = knots[i + p + 1] - knots[i + 1];
+    return (left ? ((u - knots[i]) / left) * basis(i, p - 1, u) : 0) + (right ? ((knots[i + p + 1] - u) / right) * basis(i + 1, p - 1, u) : 0);
+  };
+  const start = knots[degree], end = knots[control.length];
+  if (!(end > start)) return control;
+  const steps = Math.min(200, 16 * (control.length - degree));
+  const out: XY[] = [];
+  for (let s = 0; s <= steps; s++) {
+    const u = start + ((end - start) * s) / steps;
+    let x = 0, y = 0;
+    control.forEach(([cx, cy], i) => {
+      const b = basis(i, degree, u);
+      x += b * cx;
+      y += b * cy;
+    });
+    out.push([x, y]);
+  }
+  return out;
+}
+
 // ── numbers, rotations, transforms ─────────────────────────────────────────
 
 export const num = (value: string | undefined, fallback = 0): number => {
@@ -593,6 +625,13 @@ function readBoard(root: XmlElement, input: InputAsset, asset: SourceAsset, ctx:
       else if (silkLayer(layer)) {
         const arc = curve ? arcThrough(a, b, curve) : null;
         silkscreen.graphics.push({ id: stableId("silk", pcbId, index), layer: layer!, kind: arc ? "arc" : "line", geometry: arc ? { start: ir(a), mid: ir(arc.mid), end: ir(b) } : { start: ir(a), end: ir(b) }, width: clean(num(item.attrs.width)) });
+      }
+    } else if (item.name === "spline") {
+      // Fusion Electronics writes curves as B-splines (EAGLE never did): drawn as the polyline through it (local change: ../../NOTICE.md).
+      const path = splinePoints(item);
+      for (let i = 0; i + 1 < path.length; i++) {
+        if (layer === "Edge.Cuts") outlineItem(stableId("outline", pcbId, "plain", index, i), path[i], path[i + 1], 0);
+        else if (silkLayer(layer)) silkscreen.graphics.push({ id: stableId("silk", pcbId, index, i), layer: layer!, kind: "line", geometry: { start: ir(path[i]), end: ir(path[i + 1]) }, width: clean(num(item.attrs.width)) });
       }
     } else if (item.name === "circle") {
       const c: XY = [num(item.attrs.x), num(item.attrs.y)];
