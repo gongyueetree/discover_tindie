@@ -1,4 +1,5 @@
 import { eagleSilkscreen } from "./eagle-silkscreen";
+import { legacyBoardToKicadPcb } from "../eda/kicad-legacy-board";
 import {
   atom,
   childValue,
@@ -35,11 +36,11 @@ export function boardSilkscreen(pcb: PcbIr, assets: InputAsset[]): SilkMark[] {
     ) ||
     (boards.length === 1 ? boards[0] : undefined);
   if (!source) return /JLCEDA Pro/.test(String(pcb.coordinateSystem?.sourceUnits ?? "")) ? irSilkscreen(pcb) : [];
-  if (/\.brd$/i.test(source.path))
-    return eagleSilkscreen(new TextDecoder().decode(source.bytes));
-  const root = rootExpression(
-    parseSExpression(new TextDecoder().decode(source.bytes)),
-  );
+  const sourceText = new TextDecoder().decode(source.bytes);
+  // A KiCad legacy .brd, as the .kicad_pcb KiCad makes of it (local change: ../../NOTICE.md).
+  const legacy = /\.brd$/i.test(source.path) ? legacyBoardToKicadPcb(sourceText) : undefined;
+  if (/\.brd$/i.test(source.path) && !legacy) return eagleSilkscreen(sourceText);
+  const root = rootExpression(parseSExpression(legacy ?? sourceText));
   if (!root || head(root) !== "kicad_pcb") return [];
   const marks: SilkMark[] = [];
   const point = (n: SList | undefined): Point => ({

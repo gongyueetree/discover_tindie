@@ -1,5 +1,6 @@
 // @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import {legacyFieldLayout,legacyLabelRotation} from "./legacy-text";
+import { legacyBoardToKicadPcb } from "./kicad-legacy-board";
 import { activeKicadDocuments } from "./active-documents";
 import { arcPoints } from "./view-geometry";
 import {
@@ -926,6 +927,41 @@ function parseLegacySchematic(
   };
 }
 
+/**
+ * Copper layers the author renamed — KiCad 3/4/5 write the name itself, `(15 Top signal)`
+ * and `(layer Top)` — get KiCad's own name back (F.Cu, In1.Cu, B.Cu), so they are read and drawn
+ * as copper (local change: ../../NOTICE.md). Layer numbers: version 3 counts 0 back … 15 front
+ * (inner n → In(count−1−n), as KiCad converts it); later versions 0 front, 31 back, n → In n.
+ */
+function canonicalCopperLayers(root: SList): void {
+  const layersNode = firstChild(root, "layers");
+  if (!layersNode) return;
+  const version = Number(childValue(root, "version") ?? 0);
+  const copper = directChildren(layersNode).filter((node) => ["signal", "power", "mixed", "jumper"].includes(atom(node.items[2]) ?? ""));
+  const rename = new Map<string, string>();
+  for (const node of copper) {
+    const id = Number(atom(node.items[0])), name = atom(node.items[1]) ?? "";
+    if (/^(F|B|In\d+)\.Cu$/.test(name) || !Number.isInteger(id)) continue;
+    const canonical = version > 0 && version < 4
+      ? id === 15 ? "F.Cu" : id === 0 ? "B.Cu" : `In${Math.max(1, copper.length - 1 - id)}.Cu`
+      : id === 0 ? "F.Cu" : id === 31 ? "B.Cu" : `In${id}.Cu`;
+    rename.set(name, canonical);
+  }
+  if (!rename.size) return;
+  const visit = (node: SList) => {
+    const nodeHead = head(node);
+    for (const [index, item] of node.items.entries()) {
+      if (item.kind === "list") visit(item);
+      else if (index > 0 && (nodeHead === "layer" || nodeHead === "layers") && rename.has(item.value)) item.value = rename.get(item.value)!;
+    }
+  };
+  visit(root);
+  for (const node of copper) {
+    const name = node.items[1];
+    if (name?.kind === "atom" && rename.has(name.value)) name.value = rename.get(name.value)!;
+  }
+}
+
 function layerRole(name: string): { role: string; side: PcbIr["layers"][number]["side"] } {
   const lower = name.toLowerCase();
   if (lower === "edge.cuts") return { role: "edge", side: "both" };
@@ -1179,6 +1215,7 @@ function parsePcb(
     return { nets: [], constraints: [], sourceMap: [], recognized: 0, normalized: 0, unknown: [] };
   }
   if (!root || head(root) !== "kicad_pcb") return { nets: [], constraints: [], sourceMap: [], recognized: 0, normalized: 0, unknown: [] };
+  canonicalCopperLayers(root);
   const documentId = stableId("document", asset.sha256, asset.relativePath);
   const pcbId = stableId("pcb", documentId);
   const fileRef = sourceRef(asset.id, asset.relativePath);
@@ -1622,8 +1659,11 @@ export function parseKicad(inputs: InputAsset[], inventory: SourceAsset[]): Kica
       }
       continue;
     }
-    if (asset.extension === ".kicad_pcb") {
-      const parsed = parsePcb(input, asset, output.diagnostics);
+    // A legacy `.brd` (KiCad ≤ 2013) is read as the .kicad_pcb KiCad makes of it (local change: ../../NOTICE.md).
+    const legacyBoard = asset.extension === ".brd" ? legacyBoardToKicadPcb(decodeUtf8(input.bytes)) : undefined;
+    if (asset.extension === ".kicad_pcb" || legacyBoard) {
+      const parsed = parsePcb(legacyBoard ? { ...input, bytes: new TextEncoder().encode(legacyBoard) } : input, asset, output.diagnostics);
+      if (legacyBoard) parsed.version = "legacy";
       if (parsed.pcb) output.pcbs.push(parsed.pcb);
       output.nets.push(...parsed.nets);
       output.constraints.push(...parsed.constraints);

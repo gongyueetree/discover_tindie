@@ -374,7 +374,7 @@ export async function importGithub(selection: string, projectId: string) {
   }
   if (
     !Object.keys(data).some((p) =>
-      /\.(kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(p),
+      /\.(kicad_sch|kicad_pcb|sch|brd|fsch|fbrd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(p),
     )
   )
     throw new SourceError("No usable design files could be imported.", 422);
@@ -589,7 +589,7 @@ export function githubUsable(url: string): Promise<boolean | null> {
       if (!snap) return null;
       const size = new Map(snap.files.map((f) => [f.path, f.size]));
       return scan.projects.some((p) =>
-        p.roots.some((r) => /\.(kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(r) && (size.get(r) || 0) > LFS_POINTER_MAX),
+        p.roots.some((r) => /\.(kicad_sch|kicad_pcb|sch|brd|fsch|fbrd|SchDoc|PcbDoc|epro|esch|epcb|json)$/i.test(r) && (size.get(r) || 0) > LFS_POINTER_MAX),
       );
     } catch (e) {
       // No supported project (404), repository gone (404) or too large to scan (413): it cannot be opened.
