@@ -209,8 +209,13 @@ export async function cadPreview(
         }
       if (ez?.footprint)
         try {
-          const text = await ezplmText(ez.partId, "footprint");
+          // Fetching and drawing fail for different reasons; say which (a fetch can work next time).
+          const text = await ezplmText(ez.partId, "footprint").catch(() => null);
           const name = bare(footprintName);
+          if (text === null) {
+            out.footprint.reason = "ezplm_unavailable";
+            return;
+          }
           out.footprint = { preview: previewFootprint(text), source: ezDownload("footprint"), library: `ezPLM:${name}` };
           if (ez.model) out.model = { path: `ezPLM/${name}.step`, revision: "ezplm", url: ezDownload("model") };
           return;

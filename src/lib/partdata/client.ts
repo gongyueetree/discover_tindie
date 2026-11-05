@@ -1,5 +1,5 @@
 import "server-only";
-import { fetchSignal, sharedFetchSignal } from "@/lib/maker/request-context";
+import { fetchSignal, remainingMs, sharedFetchSignal } from "@/lib/maker/request-context";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -165,7 +165,16 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
 
 /** Signed GET, cached for 10 minutes per path + query. */
 export function pdGet(path: string, query: Query = {}, visitor?: string): Promise<{ data: any; meta: any }> {
-  return remember(`GET ${path}?${canonicalQuery(query)}`, () => send("GET", path, query, undefined, visitor));
+  // A GET that fails with a server error (500/503) is tried once more after a short pause, when the
+  // request still has time: a passing hiccup should not show the visitor an error banner.
+  const once = () => send("GET", path, query, undefined, visitor);
+  return remember(`GET ${path}?${canonicalQuery(query)}`, () =>
+    once().catch(async (e) => {
+      if (!(e instanceof PartdataError) || e.status < 500 || e.code === "unreachable" || remainingMs() < 5_000) throw e;
+      await new Promise((r) => setTimeout(r, 400));
+      return once();
+    }),
+  );
 }
 
 /** Signed POST, cached by body hash (BOM matching of the same rows is common while editing). */
