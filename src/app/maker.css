@@ -1883,7 +1883,23 @@
 .maker .pcb-pad rect {
   fill: #d9a933;
   stroke: #ffe79a;
-  stroke-width: 0.8;
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+/* Copper colour by side, as in KiCad: front red, back blue, through-hole gold. */
+.maker .pcb-pad.front rect {
+  fill: #c8504a;
+  stroke: #f08a80;
+}
+.maker .pcb-pad.back rect {
+  fill: #3a70b8;
+  stroke: #7fa8e0;
+  opacity: 0.85;
+}
+.maker .pcb-pad.aperture rect {
+  fill: none;
+  stroke: #b9c4bd;
+  stroke-dasharray: 2 2;
 }
 .maker .pcb-pad text {
   fill: #e8eee9;
@@ -2316,3 +2332,46 @@ html {scrollbar-gutter:stable;}
 .maker .pcb-net-details details {margin:8px 0;}
 .maker .pcb-net-details summary {cursor:pointer;}
 .maker .thumbnail-unavailable {display:flex;flex-direction:column;align-items:center;gap:12px;color:#718995;}
+
+/* Schematic component inspector (SchematicPartInfo) */
+.part-info p {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.viewer-inspector .part-info-fields {
+  display: block;
+  margin: 10px 0;
+}
+.part-info-fields > div {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 6px;
+  margin: 4px 0;
+}
+.part-info-fields a,
+.part-info-db .text-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.part-info-db {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7fbfb;
+}
+.part-info-db small {
+  display: block;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.viewer-inspector .part-info-db .text-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  margin-top: 6px;
+  text-align: left;
+}
+.part-info-note {
+  color: var(--muted);
+}

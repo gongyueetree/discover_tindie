@@ -199,6 +199,39 @@ function inspectZip(bytes: Uint8Array): Map<string, string> {
   return names;
 }
 
+/**
+ * Autodesk Fusion Electronics documents (local change: ../../NOTICE.md): a
+ * `.fsch` / `.fbrd` / `.flbr` is a ZIP whose `…/electron.BlobParts/ExtFile.<id>.sch|brd|lbr`
+ * is the design as EAGLE 9 XML. That document stands in for it, under the
+ * Fusion file's own name (`board.fbrd` → `board.brd`). A `.f3z` (Fusion archive)
+ * is opened for the Fusion Electronics documents it holds; its `.f3d` parts are
+ * mechanical models in Autodesk's own format and are kept as they are.
+ * Returns undefined when the bytes are not such a document.
+ */
+const FUSION_ELECTRONICS = /\.(fsch|fbrd|flbr)$/i;
+function fusionDocuments(path: string, bytes: Uint8Array, diagnostics: ParseDiagnostic[]): InputAsset[] | undefined {
+  const extension = extensionOf(path);
+  if (!FUSION_ELECTRONICS.test(path) && extension !== ".f3z") return undefined;
+  if (!hasZipSignature(bytes)) return undefined;
+  const names = inspectZip(bytes);
+  const written = (name: string) => names.get(name) ?? name;
+  const stem = path.replace(/\.[^./]+$/, "");
+  if (extension === ".f3z") {
+    const nested = unzipSync(bytes, { filter: (file) => FUSION_ELECTRONICS.test(written(file.name)) });
+    const found: InputAsset[] = [];
+    for (const [name, inner] of Object.entries(nested)) found.push(...(fusionDocuments(`${stem}/${safePath(written(name))}`, inner, diagnostics) ?? []));
+    if (!found.length) diagnostics.push(diagnostic("FUSION_MECHANICAL_ONLY", `${path} holds no Fusion Electronics schematic or board (.fsch / .fbrd): its .f3d designs are 3D models in Autodesk's own format.`, "warning", "unsupported", sourceRef("", path), "preserved"));
+    return found;
+  }
+  const inner = unzipSync(bytes, { filter: (file) => /(^|\/)electron\.BlobParts\/ExtFile\.[^/]+\.(sch|brd|lbr)$/i.test(written(file.name)) });
+  const entry = Object.entries(inner)[0];
+  if (!entry) {
+    diagnostics.push(diagnostic("FUSION_DOCUMENT_EMPTY", `${path} is a Fusion Electronics document without its EAGLE design inside; export it from Fusion as an EAGLE .sch / .brd.`, "error", "unsupported", sourceRef("", path), "preserved"));
+    return [];
+  }
+  return [{ path: `${stem}.${extensionOf(written(entry[0])).slice(1)}`, bytes: entry[1] }];
+}
+
 export async function filesToInputAssets(files: File[]): Promise<{
   assets: InputAsset[];
   diagnostics: ParseDiagnostic[];
@@ -221,6 +254,11 @@ export async function filesToInputAssets(files: File[]): Promise<{
       throw new Error("PARSER_RESOURCE_LIMIT: upload selection exceeds 75 MB");
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const fusion = fusionDocuments(safePath(suppliedPath), bytes, diagnostics);
+    if (fusion) {
+      assets.push(...fusion);
+      continue;
+    }
     if (hasZipSignature(bytes)) {
       const names = inspectZip(bytes);
       const written = (name: string) => names.get(name) ?? name;
@@ -233,6 +271,25 @@ export async function filesToInputAssets(files: File[]): Promise<{
       for (const [entryPath, entryBytes] of Object.entries(entries)) {
         if (entryPath.endsWith("/")) continue;
         const path = safePath(written(entryPath));
+        const fusion = fusionDocuments(path, entryBytes, diagnostics);
+        if (fusion) {
+          assets.push(...fusion);
+          continue;
+        }
+        // A JLCEDA / EasyEDA Pro .epro is itself a ZIP (project.json, SHEET/*.esch, PCB/*.epcb,
+        // SYMBOL/*.esym…): a project ZIP from GitHub holds it whole, so open it one level down,
+        // under its own path, with the same size and ratio checks (local change: ../../NOTICE.md).
+        if (extensionOf(path) === ".epro" && hasZipSignature(entryBytes)) {
+          const inner = inspectZip(entryBytes);
+          const innerName = (name: string) => inner.get(name) ?? name;
+          const nested = unzipSync(entryBytes, { filter: (file) => !innerName(file.name).endsWith("/") && !/^FONT\//i.test(innerName(file.name)) });
+          for (const [innerPath, innerBytes] of Object.entries(nested)) {
+            totalBytes += innerBytes.byteLength;
+            if (totalBytes > LIMITS.maxCompressedBytes * 2) throw new Error("PARSER_RESOURCE_LIMIT: project exceeds 150 MB unpacked");
+            assets.push({ path: safePath(`${path}/${innerName(innerPath)}`), bytes: innerBytes });
+          }
+          continue;
+        }
         if ([".zip", ".7z", ".rar", ".tar", ".gz"].includes(extensionOf(path))) {
           diagnostics.push(
             diagnostic(

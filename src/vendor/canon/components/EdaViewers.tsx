@@ -19,6 +19,8 @@ import { hierarchicalPort, globalPort } from "../lib/eda/port-geometry";
 import { arcPoints } from "../lib/eda/view-geometry";
 import { AssemblyScene } from "./AssemblyScene";
 import { easyEdaBodies, easyEdaModelObject, isEasyEdaStandard, pcbInMm } from "@/lib/maker/easyeda-3d";
+// Tindie: JLCEDA / EasyEDA Pro boards in 3D get KiCad copper names and body envelopes (jlcpro-3d.ts).
+import { isJlcProBoard, jlcProBodies, jlcProPcb3d } from "@/lib/maker/jlcpro-3d";
 import { modelAssets,boardAssembly } from "../lib/models/assets";
 import type {InputAsset} from "../lib/eda/types";
 import { BoardScene } from "./BoardScene";
@@ -311,6 +313,18 @@ function pcbBounds(pcb: PcbIr): Bounds | undefined {
   ]);
 }
 
+/** Which copper a pad is on: "front" / "back" SMD, "through" (several copper layers or *.Cu), or "aperture" (paste / mask only). */
+function padSide(layers: string[]) {
+  const copper = layers.filter((l) => /cu$|copper|top layer|bottom layer|multi-?layer|^\*\.cu$/i.test(l));
+  if (!layers.length) return "through";
+  if (!copper.length) return "aperture";
+  if (copper.length > 1 || copper.some((l) => /^\*|multi/i.test(l))) return "through";
+  return /^B\.|bottom/i.test(copper[0]) ? "back" : /^F\.|top/i.test(copper[0]) ? "front" : "through";
+}
+function padOrder(layers: string[]) {
+  return { back: 0, through: 1, front: 2, aperture: 3 }[padSide(layers)];
+}
+
 function layerColor(layer = "") {
   if (/^F\.|top/i.test(layer)) return "#d94d45";
   if (/^B\.|bottom/i.test(layer)) return "#3978c7";
@@ -343,6 +357,78 @@ function outlineElement(item: PcbIr["boardOutline"][number], project: (point: Nu
     return <path className="pcb-outline" d={`M ${a.x} ${a.y} A ${Math.max(Math.abs(b.x - a.x), 12)} ${Math.max(Math.abs(b.y - a.y), 12)} 0 0 1 ${b.x} ${b.y}`} key={item.id} />;
   }
   return null;
+}
+
+// Tindie (local change): a JLCEDA / EasyEDA Pro board also shows its copper fills and pours and its silkscreen,
+// as EasyEDA draws them (jlcpro-pcb.ts reads them); other formats keep the view they had.
+const SILK_COLOR: Record<string, string> = { "F.SilkS": "#f3d55b", "B.SilkS": "#9cc7a4" };
+
+function zoneArtwork(pcb: PcbIr, project: (point: NumericPoint) => NumericPoint, isVisible: (layer?: string) => boolean, selectedNetId: string | null) {
+  const order = (layer = "") => (/bottom|^B\./i.test(layer) ? 0 : /inner|^In\d/i.test(layer) ? 1 : 2);
+  return [...pcb.zones]
+    .filter((zone) => zone.shape && !zone.shape.keepout && zone.shape.fills.length && zone.layers.some(isVisible))
+    .sort((a, b) => order(a.layers[0]) - order(b.layers[0]))
+    .map((zone) => {
+      const d = zone.shape!.fills.map((fill) => fill.points.map(([x, y], i) => { const p = project({ x, y }); return `${i ? "L" : "M"}${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join("") + "Z").join(" ");
+      const dimmed = !!selectedNetId && zone.netId !== selectedNetId;
+      return <path key={zone.id} className="pcb-zone" d={d} fill={layerColor(zone.layers[0])} fillRule="evenodd" opacity={dimmed ? 0.08 : 0.5} pointerEvents="none" />;
+    });
+}
+
+function silkArtwork(pcb: PcbIr, project: (point: NumericPoint) => NumericPoint, scale: number, isVisible: (layer?: string) => boolean) {
+  const silk = pcb.silkscreen;
+  if (!silk) return null;
+  const sideLayer = (layer: string) => pcb.layers.find((item) => item.role === "silkscreen" && item.side === (layer === "B.SilkS" ? "back" : "front"))?.name;
+  const shown = (layer: string) => isVisible(sideLayer(layer));
+  const at = (value: unknown) => { const p = numericPoint(value as IrPoint | undefined); return p ? project(p) : undefined; };
+  const drawn: { layer: string; element: React.ReactElement }[] = [];
+  for (const g of silk.graphics) {
+    if (!shown(g.layer)) continue;
+    const stroke = SILK_COLOR[g.layer] ?? "#ddd";
+    const width = Math.max(Number(g.width ?? 0.15) * scale, 0.4);
+    if (g.kind === "circle") {
+      const c = at(g.geometry.center), e = at(g.geometry.end);
+      if (c && e) drawn.push({ layer: g.layer, element: <circle key={g.id} cx={c.x} cy={c.y} r={Math.hypot(e.x - c.x, e.y - c.y)} fill="none" stroke={stroke} strokeWidth={width} /> });
+      continue;
+    }
+    const start = numericPoint(g.geometry.start as IrPoint | undefined), end = numericPoint(g.geometry.end as IrPoint | undefined);
+    if (!start || !end) continue;
+    const mid = numericPoint(g.geometry.mid as IrPoint | undefined);
+    const points = g.kind === "arc" && mid ? arcPoints(start, mid, end).map(project) : [project(start), project(end)];
+    drawn.push({ layer: g.layer, element: <polyline key={g.id} points={points.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" /> });
+  }
+  // The loops of one shape (`id:k`) are filled together, even-odd: a ring's inner loop is its hole.
+  const shapes = new Map<string, typeof silk.polygons>();
+  for (const p of silk.polygons) if (shown(p.layer)) { const key = p.id.replace(/:\d+$/, ""); (shapes.get(key) ?? shapes.set(key, []).get(key)!).push(p); }
+  for (const [key, loops] of shapes) {
+    const color = SILK_COLOR[loops[0]!.layer] ?? "#ddd";
+    const d = loops.map((p) => p.points.map((q) => at(q)).filter((q): q is NumericPoint => !!q).map((q, i) => `${i ? "L" : "M"}${q.x.toFixed(2)},${q.y.toFixed(2)}`).join("") + "Z").join(" ");
+    const filled = loops.some((p) => p.filled);
+    drawn.push({ layer: loops[0]!.layer, element: <path key={key} d={d} fillRule="evenodd" fill={filled ? color : "none"} stroke={filled ? "none" : color} strokeWidth={Math.max(Number(loops[0]!.width ?? 0.1) * scale, 0.4)} /> });
+  }
+  for (const t of silk.texts) {
+    const p = shown(t.layer) ? at(t.position) : undefined;
+    if (!p) continue;
+    const height = Math.max(Number(t.size.height) * scale, 0.7);
+    const length = t.length ? Number(t.length) * scale : 0;
+    const anchor = t.justify.horizontal === "left" ? "start" : t.justify.horizontal === "right" ? "end" : "middle";
+    const baseline = t.justify.vertical === "top" ? "hanging" : t.justify.vertical === "center" ? "central" : "alphabetic";
+    const color = SILK_COLOR[t.layer] ?? "#ddd";
+    // A mirrored text (bottom silkscreen seen from the top) is the board's mirror image about its anchor.
+    // The text's box in its own frame (y down): along the baseline from the anchor, up from it by its height.
+    const x0 = anchor === "start" ? 0 : anchor === "end" ? -length : -length / 2;
+    const y0 = baseline === "alphabetic" ? -height : baseline === "central" ? -height / 2 : 0;
+    const margin = t.inverse ? Number(t.inverse.margin) * scale : 0;
+    drawn.push({ layer: t.layer, element: <g key={t.id} transform={`translate(${p.x} ${p.y}) scale(${t.mirrored ? -1 : 1} 1) rotate(${-Number(t.angle || 0)})`}>
+      {t.inverse && length > 0 && <rect x={x0 - margin} y={y0 - margin} width={length + 2 * margin} height={height + 2 * margin} fill={color} />}
+      <text x={0} y={0} textAnchor={anchor} dominantBaseline={baseline} {...(length > 0 ? { textLength: length, lengthAdjust: "spacingAndGlyphs" as const } : {})} style={{ fontSize: height * 1.38, fill: t.inverse ? "#10241f" : color, fontFamily: "Arial, sans-serif" }}>{t.text}</text>
+    </g> });
+  }
+  // Seen from the top: the bottom's silkscreen shows through, fainter.
+  return <g className="pcb-silkscreen" pointerEvents="none">
+    <g opacity={0.45}>{drawn.filter((d) => d.layer === "B.SilkS").map((d) => d.element)}</g>
+    {drawn.filter((d) => d.layer !== "B.SilkS").map((d) => d.element)}
+  </g>;
 }
 
 export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: CanonicalIrBundle; library?: boolean; assets?:InputAsset[] }) {
@@ -393,6 +479,7 @@ export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: Ca
             <rect width={viewWidth} height={VIEW_HEIGHT} fill={library ? "#ffffff" : "#10241f"} />
             {!library && <rect width={VIEW_WIDTH} height={VIEW_HEIGHT} fill={`url(#pcb-grid-${documentIndex})`} opacity=".42" />}
             <g transform={`translate(${pan.x} ${pan.y})`}>
+            {isJlcProBoard(pcb) && zoneArtwork(pcb, project, isVisible, selectedNetId)}
             {pcb.boardOutline.map((item) => outlineElement(item, project))}
             {!library && pcb.footprints.map(fp=>{const center=numericPoint(fp.position);if(!center)return null;
               const pads=pcb.pads.filter(p=>p.footprintId===fp.id),coordinates=[center,...pads.map(p=>numericPoint(p.position)).filter((p):p is NumericPoint=>!!p)];
@@ -415,17 +502,21 @@ export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: Ca
               </g>;
 
             })}
-            {pcb.pads.filter((pad) => pad.layers.some(isVisible) || !pad.layers.length).map((pad) => {
+            {/* Pads drawn as an EDA tool does (local change: ../../NOTICE.md): back-side copper first, in the back
+                copper colour, then through-hole, then front copper; a pad that is only a paste or mask
+                opening (e.g. the paste windows over a QFN's thermal pad) is an outline, not copper. */}
+            {pcb.pads.filter((pad) => pad.layers.some(isVisible) || !pad.layers.length).sort((a,b)=>padOrder(a.layers)-padOrder(b.layers)).map((pad) => {
               const position = numericPoint(pad.position); if (!position) return null;
               const p = project(position); const sizeX = Math.max(Number(pad.size?.x ?? 1.2) * scale, .3); const sizeY = Math.max(Number(pad.size?.y ?? 1.2) * scale, .3);
               const selected = !selectedNetId || pad.netId === selectedNetId;
-              return <g className={`pcb-pad ${selected ? "" : "dimmed"} ${(selectedNetId && selected) || selectedReference===footprintById.get(pad.footprintId ?? "")?.reference ? "net-selected" : ""}`} key={pad.id} role="button" tabIndex={0}
+              return <g className={`pcb-pad ${padSide(pad.layers)} ${selected ? "" : "dimmed"} ${(selectedNetId && selected) || selectedReference===footprintById.get(pad.footprintId ?? "")?.reference ? "net-selected" : ""}`} key={pad.id} role="button" tabIndex={0}
                 aria-label={`Select pad ${pad.number} net ${pad.netName || 'unassigned'}`}
                 onPointerDown={e=>e.stopPropagation()} onClick={()=>chooseNet(pad.netId)}
                 onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseNet(pad.netId);}}}><title>{`${footprintById.get(pad.footprintId ?? "")?.reference ?? ""}.${pad.number} · ${pad.netName ?? ""}`}</title><g transform={`rotate(${-Number(pad.rotation ?? 0)} ${p.x} ${p.y})`}><rect x={p.x - sizeX / 2} y={p.y - sizeY / 2} width={sizeX} height={sizeY} rx={/circle|oval/i.test(pad.shape) ? Math.min(sizeX, sizeY) / 2 : pad.shape === "roundrect" ? Math.min(sizeX,sizeY)*.2 : 0} />{pad.drill && <ellipse cx={p.x} cy={p.y} rx={Number(pad.drill.x)*scale/2} ry={Number(pad.drill.y)*scale/2} fill={library ? "#ffffff" : "#10241f"} />}</g>{(showLabels || !!selectedNetId && selected) && <text x={library ? p.x : p.x + sizeX / 2 + 2} y={library ? p.y : p.y + 3} textAnchor={library ? "middle" : undefined} dominantBaseline={library ? "central" : undefined} style={library ? {fontSize:Math.max(1,Math.min(sizeY*.65,sizeX/(Math.max(pad.number.length,1)*.7),28)),fill:"#fff5a3"} : undefined}>{library ? pad.number : `${footprintById.get(pad.footprintId ?? "")?.reference}.${pad.number}`}</text>}</g>;
             })}
             {pcb.vias.map((via) => { const position = numericPoint(via.position); if (!position) return null; const p = project(position); return <g className={`pcb-via ${selectedNetId && via.netId !== selectedNetId ? "dimmed" : ""}`} key={via.id} onPointerDown={e=>e.stopPropagation()} onClick={()=>chooseNet(via.netId)}><circle cx={p.x} cy={p.y} r={Math.max(Number(via.size ?? 0.8) * scale / 2, .2)} /><circle cx={p.x} cy={p.y} r={Math.max(Number(via.drill ?? 0.35) * scale / 2, .1)} /></g>; })}
             {pcb.footprints.map(footprint => {const position=numericPoint(footprint.position);if(!position)return null;const p=project(position);return <g className="pcb-source-graphics" pointerEvents="none" key={footprint.id} transform={`translate(${p.x} ${p.y}) rotate(${-Number(footprint.rotation)})`}>{(footprint.graphics ?? []).filter(g=>isVisible(g.layer)&&/SilkS|Fab|CrtYd/.test(g.layer)).map(g=><g key={g.id} data-layer={g.layer}>{outlineElement(g,v=>({x:v.x*scale,y:v.y*scale}))}</g>)}</g>;})}
+            {isJlcProBoard(pcb) && silkArtwork(pcb, project, scale, isVisible)}
             {showLabels && !library && pcb.footprints.map(footprint => {const position=numericPoint(footprint.position);if(!position)return null;const p=project(position);return <text key={footprint.id} x={p.x} y={p.y-10} fill="#eee" fontSize="10" textAnchor="middle">{footprint.reference}</text>;})}
 
             </g>
@@ -455,7 +546,7 @@ export function Board3DViewer({ bundle,assets=[],active=true }: { bundle: Canoni
   const [index,setIndex]=useState(0),[choice,setChoice]=useState("auto");
   const pcb=bundle.pcbs[Math.min(index,Math.max(0,bundle.pcbs.length-1))];
   // Tindie: EasyEDA Standard boards are in 10 mil with EasyEDA layer names; 3D gets millimetres and body envelopes (easyeda-3d.ts).
-  const easy=useMemo(()=>pcb&&isEasyEdaStandard(pcb)?{pcb:pcbInMm(pcb),bodies:easyEdaBodies(pcb,assets)}:null,[pcb,assets]);
+  const easy=useMemo(()=>pcb&&isEasyEdaStandard(pcb)?{pcb:pcbInMm(pcb),bodies:easyEdaBodies(pcb,assets)}:pcb&&isJlcProBoard(pcb)?{pcb:jlcProPcb3d(pcb),bodies:jlcProBodies(pcb)}:null,[pcb,assets]);
   if(!pcb)return <EmptyViewer kind="3D PCB" format={bundle.project.sourceFormat}/>;
   const models=modelAssets(assets),assembly=boardAssembly(pcb,models);
   const selected=choice==="auto"?undefined:models.find(a=>a.path===choice);

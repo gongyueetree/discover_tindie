@@ -16,7 +16,9 @@ import { arcPoints } from "@/vendor/canon/lib/eda/view-geometry";
  */
 export type Ink =
   | "wire" | "bus" | "junction" | "body" | "pin" | "pinName" | "pinNumber" | "field" | "fieldOther"
-  | "label" | "global" | "hier" | "noConnect" | "note" | "sheet" | "sheetName" | "sheetFile" | "frame";
+  | "label" | "global" | "hier" | "noConnect" | "note" | "sheet" | "sheetName" | "sheetFile" | "frame"
+  // Tindie: a sheet's own grey drawing aids (EasyEDA Pro section boxes, jlcpro-schematic.ts).
+  | "graphic";
 export type Dash = "dash" | "dot" | "dash_dot" | "dash_dot_dot";
 export type Path = { d: number[]; ink: Ink; w: number; closed?: true; fill?: "body" | "ink"; dash?: Dash; net?: string };
 export type Circle = { x: number; y: number; r: number; ink: Ink; w: number; fill?: "body" | "ink" };

@@ -15,7 +15,8 @@ export type GithubProject = {
   version?: number[];
   recommended?: boolean;
 };
-const supported = /\.(kicad_pro|kicad_sch|kicad_pcb|sch|brd|SchDoc|PcbDoc|PrjPcb|epro|eprj|epru|esch|epcb)$/i;
+// .fsch / .fbrd: Autodesk Fusion Electronics documents (each holds its design as EAGLE XML).
+const supported = /\.(kicad_pro|kicad_sch|kicad_pcb|sch|brd|fsch|fbrd|SchDoc|PcbDoc|PrjPcb|epro|eprj|epru|esch|epcb)$/i;
 /** EasyEDA (standard) exports: Schematic_*.json / PCB_*.json, or JSON kept in an easyeda / lceda / jlc folder. */
 const easyedaJson = (path: string) =>
   /\.json$/i.test(path) &&
@@ -73,25 +74,28 @@ export function discoverProjects(
     }
     const list = all.filter((v) => !folderFormat(v.path) && !/\.epro$/i.test(v.path));
     if (!list.length) continue;
-    const board = list.filter((f) => /\.(kicad_pcb|brd|PcbDoc)$/i.test(f.path));
+    const board = list.filter((f) => /\.(kicad_pcb|brd|fbrd|PcbDoc)$/i.test(f.path));
     const projects = list.filter((f) => /\.kicad_pro$/i.test(f.path));
     const anchors = board.length
       ? board
       : projects.length
         ? projects
-        : list.filter((f) => /\.(kicad_sch|sch|SchDoc)$/i.test(f.path));
+        : list.filter((f) => /\.(kicad_sch|sch|fsch|SchDoc)$/i.test(f.path));
     for (const f of anchors) {
       const base = stem(f.path),
         roots = list.filter((v) => stem(v.path) === base).map((v) => v.path);
       const siblings = list.filter((v) =>
-        /\.(kicad_sch|sch|SchDoc)$/i.test(v.path),
+        /\.(kicad_sch|sch|fsch|SchDoc)$/i.test(v.path),
       );
       if (
-        !roots.some((v) => /\.(kicad_sch|sch|SchDoc)$/i.test(v)) &&
+        !roots.some((v) => /\.(kicad_sch|sch|fsch|SchDoc)$/i.test(v)) &&
         anchors.length === 1 &&
         siblings.length === 1
       )
         roots.push(siblings[0].path);
+      // A KiCad 3–5 project file beside it: it names the root sheet and board, and its local libraries.
+      const legacyProject = files.find((v) => v.path === base + ".pro" && v.type === "blob");
+      if (legacyProject && !/\.kicad_pro$/i.test(f.path) && !files.some((v) => v.path === base + ".kicad_pro")) roots.push(legacyProject.path);
       const name = base.split("/").pop()!;
       const version = (
         base.match(/(?:^|[/ _-])(?:v|rev[ _-]?)(\d+(?:[._-]\d+)*)/i)?.[1] || ""
@@ -105,6 +109,10 @@ export function discoverProjects(
         directory: dir,
         format: /\.kicad_/i.test(f.path)
           ? "KiCad"
+          : /\.f(brd|sch)$/i.test(f.path)
+            ? "Fusion Electronics"
+          : legacyProject
+            ? "KiCad (legacy)"
           : /\.brd$/i.test(f.path)
             ? "Eagle"
             : "Eagle / KiCad 5",
@@ -165,8 +173,8 @@ const OUTPUT_DIR = /(^|\/)(docs?|gen|generated|outputs?|exports?|fab|fabrication
 export function designRank(p: GithubProject) {
   let score = 0;
   if (p.roots.some((r) => /\.kicad_pro$/i.test(r))) score += 4;
-  if (p.roots.some((r) => /\.(kicad_sch|sch|SchDoc|esch)$/i.test(r))) score += 2;
-  if (p.roots.some((r) => /\.(kicad_pcb|brd|PcbDoc|epcb)$/i.test(r))) score += 2;
+  if (p.roots.some((r) => /\.(kicad_sch|sch|fsch|SchDoc|esch)$/i.test(r))) score += 2;
+  if (p.roots.some((r) => /\.(kicad_pcb|brd|fbrd|PcbDoc|epcb)$/i.test(r))) score += 2;
   if (/^eagle$/i.test(p.format) && p.roots.every((r) => /\.brd$/i.test(r))) score -= 2;
   if (OUTPUT_DIR.test(p.directory)) score -= 6;
   return score;
@@ -185,12 +193,14 @@ export function resolveRepoPath(parent: string, relative: string) {
 export function referencedFiles(path: string, text: string) {
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const result: string[] = [];
+  // Quoted (KiCad 6+) or bare (KiCad 5: `(model ${KIPRJMOD}/lib/x.step` and
+  // `(uri ${KIPRJMOD}/library/symbol/Chip.lib)` in sym-lib-table / fp-lib-table).
   const re =
-    /(?:\(property\s+"Sheet\s*file"\s+"([^"]+)"|\(model\s+"([^"]+)"|\(uri\s+"([^"]+)")/gi;
+    /(?:\(property\s+"Sheet\s*file"\s+"([^"]+)"|\(model\s+(?:"([^"]+)"|([^\s()"]+))|\(uri\s+(?:"([^"]+)"|([^\s()"]+)))/gi;
   for (const m of text.matchAll(re)) {
-    const raw = m[1] || m[2] || m[3];
+    const raw = m[1] || m[2] || m[3] || m[4] || m[5];
     if (!raw || /\$\{(?!KIPRJMOD)/.test(raw)) continue;
-    const resolved = resolveRepoPath(dir, raw.replace(/^\$\{KIPRJMOD\}\//, ""));
+    const resolved = resolveRepoPath(dir, raw.replace(/^\$\{KIPRJMOD\}[\\/]/, "").replace(/\\/g, "/"));
     if (resolved) result.push(resolved);
   }
   // Altium .PrjPcb: DocumentPath=Sheets\Power.SchDoc

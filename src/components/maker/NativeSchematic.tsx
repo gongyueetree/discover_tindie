@@ -10,6 +10,7 @@ import type {
   InputAsset,
 } from "@/vendor/canon/lib/eda/types";
 import { SchematicViewer } from "@/vendor/canon/components/EdaViewers";
+import SchematicPartInfo from "./SchematicPartInfo";
 import { drawSchematics } from "@/vendor/eelib/view";
 const colors: Record<Ink, string> = {
   wire: "#008000",
@@ -30,6 +31,7 @@ const colors: Record<Ink, string> = {
   sheetName: "#008080",
   sheetFile: "#808000",
   frame: "#b04040",
+  graphic: "#999999",
 };
 export default function NativeSchematic({
   bundle,
@@ -431,16 +433,13 @@ export default function NativeSchematic({
         </svg>
         <aside className="viewer-inspector">
           {selectedSymbol && (
-            <section>
-              <h3>{selectedSymbol.reference}</h3>
-              <p>{selectedSymbol.value}</p>
-              {selectedPart?.mpnRaw && <p>{selectedPart.mpnRaw}</p>}
-              {selectedPart?.manufacturerRaw && (
-                <p>{selectedPart.manufacturerRaw}</p>
-              )}
-              {selectedPart?.footprint && <p>{selectedPart.footprint}</p>}
-              <small>{d.name}</small>
-            </section>
+            <SchematicPartInfo
+              key={selectedSymbol.reference}
+              reference={selectedSymbol.reference}
+              value={selectedSymbol.value}
+              part={selectedPart}
+              sheet={d.name}
+            />
           )}
           {net && (
             <section>

@@ -37,6 +37,7 @@ import InteractiveBom from "./InteractiveBom";
 import GithubImport from "./GithubImport";
 import type { GithubProject } from "@/lib/maker/github-projects";
 import { download } from "@/lib/maker/download";
+import { unsupportedCadReason } from "@/lib/maker/unsupported-cad";
 type DesignInfo = {
   id: string;
   name: string;
@@ -108,7 +109,8 @@ export default function Viewer({
       const b = await parseEdaProject(r.assets, r.diagnostics);
       if (!b.schematics.length && !b.pcbs.length)
         throw Error(
-          "No supported schematic or PCB found. Supported: KiCad 5–10, EAGLE 6+ XML, Altium Designer, EasyEDA Standard and JLCEDA / EasyEDA Pro. Binary EAGLE files must be saved as XML first; a .brd file can also be another tool's export (it is not always an EAGLE board). If the repository lists more than one project, choose another one.",
+          unsupportedCadReason(r.assets, b.diagnostics) ??
+            "No supported schematic or PCB found. Supported: KiCad 3–10 (including legacy .sch / .brd), EAGLE 6+ XML, Fusion Electronics (.fsch / .fbrd), Altium Designer, EasyEDA Standard and JLCEDA / EasyEDA Pro. Binary EAGLE files must be saved as XML first; a .brd file can also be another tool's export (it is not always an EAGLE board). If the repository lists more than one project, choose another one.",
         );
       setBundle(b);
       setVisited([]);
