@@ -122,6 +122,22 @@ const results: string[] = [];
   assert.deepEqual(curve[curve.length >> 1].map((v) => Number(v.toFixed(6))), [1.5, 0.75], "Bézier midpoint");
   results.push("3D outline tolerance, Fusion splines");
 
+  // ── KiCad 7+ Edge.Cuts gr_poly with (arc …) rounded corners (GlasgowEmbedded/glasgow revD1) ──
+  const polyPcb = `(kicad_pcb (version 20260206) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (gr_poly (pts
+    (arc (start 30 25) (mid 28.535534 28.535534) (end 25 30))
+    (arc (start 5 30) (mid 1.464466 28.535534) (end 0 25))
+    (arc (start 0 5) (mid 1.464466 1.464466) (end 5 0))
+    (arc (start 25 0) (mid 28.535534 1.464466) (end 30 5)))
+    (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "84111b1e-3beb-457b-b46d-1545baea5729")))`;
+  r = await open([file("rounded.kicad_pcb", enc.encode(polyPcb))]);
+  const ol = r.bundle.pcbs[0].boardOutline;
+  assert.deepEqual(ol.map((o: any) => o.kind), ["arc", "line", "arc", "line", "arc", "line", "arc", "line"], "corners and the straight edges between them");
+  assert.equal(r.bundle.pcbs[0].physicalDimensions?.width, "30");
+  assert.equal(board(ol).length, 1, "the rounded outline closes in 3D");
+  results.push("KiCad gr_poly outline with arc corners");
+
   // ── Files that cannot be drawn: the message names the file and why ──
   const binaryEagle = new Uint8Array(64);
   binaryEagle.set([0x10, 0x00, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00]);

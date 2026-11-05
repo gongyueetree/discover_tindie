@@ -2375,3 +2375,19 @@ html {scrollbar-gutter:stable;}
 .part-info-note {
   color: var(--muted);
 }
+
+/* The board must not move when the side panel grows (a selected net can list many pads): the row is
+   as tall as the drawing, and the side panel scrolls inside it instead of stretching the canvas
+   (whose drawing is centred vertically, so a taller canvas pushed the board down). */
+.maker .viewer-body > .viewer-inspector {
+  height: 0;
+  min-height: 100%;
+  max-height: none;
+  overflow: auto;
+}
+@media (max-width: 720px) {
+  .maker .viewer-body > .viewer-inspector {
+    height: auto;
+    min-height: 0;
+  }
+}

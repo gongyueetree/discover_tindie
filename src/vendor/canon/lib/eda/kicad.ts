@@ -1013,6 +1013,48 @@ function rotateNumericPoint(value: NumericPoint, center: NumericPoint, angle: nu
   };
 }
 
+/** Edge.Cuts polygon → outline lines and arcs, in order, closed (see the gr_poly note above). */
+function polygonOutline(
+  node: SList,
+  idBase: string,
+  transform?: (value: NumericPoint) => NumericPoint,
+  source?: string,
+): PcbIr["boardOutline"] {
+  const t = (p: NumericPoint | null | undefined) => (p && transform ? transform(p) : p) ?? null;
+  const pts = firstChild(node, "pts");
+  if (!pts) return [];
+  const out: PcbIr["boardOutline"] = [];
+  const same = (a: NumericPoint, b: NumericPoint) => Math.hypot(a.x - b.x, a.y - b.y) < 1e-6;
+  let first: NumericPoint | null = null, prev: NumericPoint | null = null, n = 0;
+  const line = (a: NumericPoint, b: NumericPoint) => {
+    if (same(a, b)) return;
+    out.push({ id: `${idBase}:${n++}`, kind: "line", geometry: { start: irPointFromNumeric(a), end: irPointFromNumeric(b), ...(source ? { source } : {}) } });
+  };
+  for (const item of pts.items) {
+    if (!Array.isArray((item as SList).items)) continue;
+    const child = item as SList;
+    const head = atom(child.items[0]);
+    if (head === "xy") {
+      const p = t({ x: Number(atom(child.items[1])), y: Number(atom(child.items[2])) });
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+      if (prev) line(prev, p);
+      first ??= p;
+      prev = p;
+    } else if (head === "arc") {
+      const start = t(numericPointFromNode(firstChild(child, "start")));
+      const mid = t(numericPointFromNode(firstChild(child, "mid")));
+      const end = t(numericPointFromNode(firstChild(child, "end")));
+      if (!start || !mid || !end) continue;
+      if (prev) line(prev, start);
+      first ??= start;
+      out.push({ id: `${idBase}:${n++}`, kind: "arc", geometry: { start: irPointFromNumeric(start), mid: irPointFromNumeric(mid), end: irPointFromNumeric(end), ...(source ? { source } : {}) } });
+      prev = end;
+    }
+  }
+  if (first && prev) line(prev, first);
+  return out;
+}
+
 function outlineGeometry(
   node: SList,
   kind: PcbIr["boardOutline"][number]["kind"],
@@ -1400,6 +1442,13 @@ function parsePcb(
       });
     }
   }
+  // A polygon on Edge.Cuts (`gr_poly`; KiCad 7+ may mix `(xy …)` corners and `(arc …)` rounded
+  // corners in its `pts`, joined by straight edges and closed back to the start) becomes the same
+  // lines and arcs a hand-drawn outline would be (local change: ../../NOTICE.md).
+  for (const [index, polyNode] of directChildren(root, "gr_poly").entries()) {
+    if (childValue(polyNode, "layer") !== "Edge.Cuts") continue;
+    boardOutline.push(...polygonOutline(polyNode, stableId("outline", pcbId, nodeUuid(polyNode, `gr_poly:${index}`))));
+  }
   const footprintOutlineHeads = new Map<string, PcbIr["boardOutline"][number]["kind"]>([
     ["fp_line", "line"], ["fp_arc", "arc"], ["fp_circle", "circle"], ["fp_rect", "rectangle"],
   ]);
@@ -1407,6 +1456,11 @@ function parsePcb(
     const footprintAt = nodeAt(footprintNode);
     if (!footprintAt) continue;
     const mirrored = (childValue(footprintNode, "layer") ?? "").startsWith("B.");
+    for (const [polyIndex, polyNode] of directChildren(footprintNode, "fp_poly").entries()) {
+      if (childValue(polyNode, "layer") !== "Edge.Cuts") continue;
+      const id = stableId("outline", pcbId, nodeUuid(polyNode, `footprint:${footprintIndex}:fp_poly:${polyIndex}`));
+      boardOutline.push(...polygonOutline(polyNode, id, (value) => transformFootprintGeometryPoint(value, footprintAt, mirrored), "footprint"));
+    }
     for (const [nodeHead, kind] of footprintOutlineHeads) {
       for (const [graphicIndex, outlineNode] of directChildren(footprintNode, nodeHead).entries()) {
         if (childValue(outlineNode, "layer") !== "Edge.Cuts") continue;
