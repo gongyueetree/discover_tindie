@@ -1,0 +1,20 @@
+{
+  "schematics": { "s1": { "name": "Demo", "sheets": [{ "name": "Main sheet", "id": 1, "uuid": "u1" }] } },
+  "pcbs": { "b1": "Demo panel", "b2": "Demo board" },
+  "devices": {
+    "d1": {
+      "title": "Regulator",
+      "attributes": {
+        "Symbol": "sym1",
+        "Footprint": "fp1",
+        "Designator": "U?",
+        "Manufacturer": "Acme",
+        "Manufacturer Part": "ACME-LDO33",
+        "3D Model Title": "SOT-23-3_L2.9-W1.3-H1.1",
+        "Name": "={Manufacturer Part}"
+      }
+    },
+    "d2": { "title": "Ground", "attributes": { "Symbol": "gnd" } }
+  },
+  "footprints": { "fp1": { "title": "SOT-23-3" } }
+}

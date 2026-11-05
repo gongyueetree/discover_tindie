@@ -30,6 +30,7 @@ const colors: Record<Ink, string> = {
   sheetName: "#008080",
   sheetFile: "#808000",
   frame: "#b04040",
+  graphic: "#999999",
 };
 export default function NativeSchematic({
   bundle,

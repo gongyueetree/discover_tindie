@@ -34,7 +34,7 @@ export function boardSilkscreen(pcb: PcbIr, assets: InputAsset[]): SilkMark[] {
       paths.some((p) => p.split("/").pop() === a.path.split("/").pop()),
     ) ||
     (boards.length === 1 ? boards[0] : undefined);
-  if (!source) return [];
+  if (!source) return /JLCEDA Pro/.test(String(pcb.coordinateSystem?.sourceUnits ?? "")) ? irSilkscreen(pcb) : [];
   if (/\.brd$/i.test(source.path))
     return eagleSilkscreen(new TextDecoder().decode(source.bytes));
   const root = rootExpression(
@@ -166,6 +166,59 @@ export function boardSilkscreen(pcb: PcbIr, assets: InputAsset[]): SilkMark[] {
   }
   return marks;
 }
+/**
+ * The silkscreen the reader keeps in the IR (pcb.silkscreen), as marks — for boards with no KiCad or
+ * EAGLE source to read it from (JLCEDA / EasyEDA Pro, jlcpro-pcb.ts). Local change (../NOTICE.md).
+ */
+function irSilkscreen(pcb: PcbIr): SilkMark[] {
+  const silk = pcb.silkscreen;
+  if (!silk) return [];
+  const side = (layer: string) => (layer === "B.SilkS" ? "back" : "front") as SilkMark["side"];
+  const at = (value: unknown): Point | undefined => {
+    const p = value as { x: string; y: string } | undefined;
+    return p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)) ? { x: Number(p.x), y: Number(p.y) } : undefined;
+  };
+  const marks: SilkMark[] = [];
+  for (const g of silk.graphics) {
+    const width = Number(g.width) || 0.15;
+    const start = at(g.geometry.start), end = at(g.geometry.end), mid = at(g.geometry.mid), center = at(g.geometry.center);
+    if (g.kind === "circle" && center && end) {
+      const r = Math.hypot(end.x - center.x, end.y - center.y);
+      marks.push({ side: side(g.layer), width, closed: true, points: Array.from({ length: 49 }, (_, i) => ({ x: center.x + r * Math.cos((i * Math.PI) / 24), y: center.y + r * Math.sin((i * Math.PI) / 24) })) });
+    } else if (start && end) marks.push({ side: side(g.layer), width, points: g.kind === "arc" && mid ? arcPoints(start, mid, end) : [start, end] });
+  }
+  // A shape of several loops (a ring, a letter with a counter) is outlined: a canvas fill would close its holes.
+  const shapes = new Map<string, typeof silk.polygons>();
+  for (const p of silk.polygons) { const key = p.id.replace(/:\d+$/, ""); (shapes.get(key) ?? shapes.set(key, []).get(key)!).push(p); }
+  for (const loops of shapes.values())
+    for (const p of loops) {
+      const points = p.points.map(at).filter((q): q is Point => !!q);
+      if (points.length >= 3) marks.push({ side: side(p.layer), width: loops.length > 1 ? 0.1 : Number(p.width) || 0.05, points, closed: true, filled: loops.length === 1 && p.filled });
+    }
+  for (const t of silk.texts) {
+    const position = at(t.position);
+    if (!position || !t.text.trim()) continue;
+    const height = Number(t.size.height) || 1;
+    const angle = Number(t.angle) || 0;
+    // The canvas sets text on its middle: move the anchor there from where the text hangs on it.
+    const up = t.justify.vertical === "bottom" ? height / 2 : t.justify.vertical === "top" ? -height / 2 : 0;
+    const r = (angle * Math.PI) / 180;
+    const [dx, dy] = [-up * Math.sin(r), -up * Math.cos(r)];
+    marks.push({
+      side: side(t.layer),
+      width: Number(t.thickness) || 0.15,
+      text: t.text,
+      // Mirrored text is the board's mirror image about its anchor: the canvas mirrors after it turns, so it turns the other way.
+      position: { x: position.x + (t.mirrored ? -dx : dx), y: position.y + dy },
+      angle: t.mirrored ? -angle : angle,
+      size: height * 1.38,
+      mirror: t.mirrored,
+      align: t.justify.horizontal,
+    });
+  }
+  return marks;
+}
+
 export function paintSilkscreen(
   ctx: CanvasRenderingContext2D,
   marks: SilkMark[],

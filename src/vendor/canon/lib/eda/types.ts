@@ -310,6 +310,12 @@ export type PcbText = {
   thickness?: string;
   justify: { horizontal: "left" | "center" | "right"; vertical: "top" | "center" | "bottom" };
   mirrored: boolean;
+  /**
+   * EasyEDA Pro's drawn extent of the text along its baseline (mm), when the reader knows it, and whether it is
+   * knocked out of a filled box `margin` (mm) wider all round (its "inverse" text). Local addition (../NOTICE.md).
+   */
+  length?: string;
+  inverse?: { margin: string };
 };
 
 /** A drawn polygon (mm): its corners, stroke width, and whether it is filled. Local addition (../NOTICE.md). */
