@@ -7,6 +7,8 @@ import { legacyProjectSchematics, legacySymbolLibraryText, legacyWireUuid } from
 import { drawEagleSchematic } from "./eagle-schematic";
 // Tindie: EasyEDA Standard schematics (eelib has no drawer for them).
 import { easyEdaSheets } from "@/lib/maker/easyeda-schematic";
+// Tindie: JLCEDA / EasyEDA Pro schematics, drawn from their sheets and symbols.
+import { jlcProSheets } from "@/lib/maker/jlcpro-schematic";
 import { drawSchematic, sheetOutline, type SheetChild, type SheetDrawing, type SheetHit, type SheetInstance } from "./kicad-schematic";
 
 /**
@@ -37,8 +39,11 @@ import { drawSchematic, sheetOutline, type SheetChild, type SheetDrawing, type S
  * Version 6: Altium sheets are drawn from their SchDoc (altium-schematic.ts,
  * user feedback 2026-10-28: an Altium design showed no schematic), in their
  * hierarchy, each sheet symbol opening its sheet.
+ *
+ * Version 7 (Tindie): JLCEDA / EasyEDA Pro sheets are drawn from their .esch and .esym
+ * (jlcpro-schematic.ts) instead of falling back to the IR view.
  */
-export const VIEW_VERSION = 6;
+export const VIEW_VERSION = 7;
 
 export type ProjectView = {
   version: number;
@@ -139,6 +144,8 @@ export function drawSchematics(bundle: CanonicalIrBundle, inputs: readonly Input
   if (bundle.project.sourceFormat === "easyeda") {
     const sheets = easyEdaSheets(inputs);
     if (sheets.length) return sheets;
+    const pro = jlcProSheets(inputs);
+    if (pro.length) return pro;
   }
   let active = [...new Set(paths.filter((path) => path.endsWith(".kicad_sch")))];
   let assets = inputs;

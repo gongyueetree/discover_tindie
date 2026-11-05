@@ -131,10 +131,14 @@ export function easyEdaProSilk(record: unknown[], into: Silkscreen): void {
   });
 }
 
-/** EasyEDA Pro's text anchor, 1–9: left, centre, right along each row, the rows top, middle, bottom. */
+/**
+ * EasyEDA Pro's text anchor, 1–9: left top, left middle, left bottom, then centre and right the same
+ * way (its align modes; jlcpro-pcb.ts, checked against EasyEDA's own layout images). Left bottom
+ * when absent.
+ */
 function proAnchor(value: number | undefined): PcbText["justify"] {
-  const n = value !== undefined && value >= 1 && value <= 9 ? Math.round(value) - 1 : 6;
-  return { horizontal: (["left", "center", "right"] as const)[n % 3]!, vertical: (["top", "center", "bottom"] as const)[Math.floor(n / 3)]! };
+  const n = value !== undefined && value >= 1 && value <= 9 ? Math.round(value) - 1 : 2;
+  return { horizontal: (["left", "center", "right"] as const)[Math.floor(n / 3)]!, vertical: (["top", "center", "bottom"] as const)[n % 3]! };
 }
 
 function graphic(id: string, layer: string, kind: Graphic["kind"], geometry: Record<string, unknown>, width: number | undefined): Graphic {

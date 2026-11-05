@@ -11,7 +11,8 @@ import type {
   SourceRef,
 } from "./types";
 import { basename, decodeUtf8, diagnostic, point, sourceRef, stableId, withoutExtension } from "./util";
-import { easyEdaProSilk, emptySilkscreen } from "./easyeda-silk";
+import { readJlcProBoard, type JlcProBoardContext } from "./jlcpro-pcb";
+import { readRecords, readSymbol, symbolUnit as symbolUnitRecords, type ProSymbol } from "./jlcpro-records";
 
 type JsonObject = Record<string, unknown>;
 type RecordLine = unknown[];
@@ -121,6 +122,9 @@ function parseSchematicRecords(
   output: KicadParseOutput,
   projectSheetNames: Map<string, string>,
   partsByReference: Map<string, PartIr>,
+  devices: Map<string, Record<string, string>> = new Map(),
+  symbolOf: (uuid: string) => ProSymbol | null = () => null,
+  footprintTitles: Map<string, string> = new Map(),
 ): void {
   const byType = recordsByType(records);
   const attributes = attributeMap(records, "schematic");
@@ -146,7 +150,20 @@ function parseSchematicRecords(
     const partId = existingPart?.id ?? stableId("part", schematicId, nativeId, reference);
     const unitNumber = (existingPart?.symbolUnits.length ?? 0) + 1;
     const symbolUnitId = stableId("symbol-unit", partId, nativeId, unitNumber);
-    const fields = Object.fromEntries(Object.entries(attrs).map(([key, entry]) => [key, entry.value]));
+    // Fields the sheet leaves empty come from the project's device (local change: ../NOTICE.md), `={Other}` resolved.
+    const device = devices.get(attrs.Device?.value ?? "") ?? {};
+    const lookup = (key: string): string | undefined => attrs[key]?.value || device[key] || undefined;
+    const resolved = (key: string, depth = 0): string => {
+      const raw = lookup(key) ?? "";
+      return raw.startsWith("=") && depth < 4 ? raw.slice(1).replace(/\{([^}]+)\}/g, (_, other: string) => resolved(other, depth + 1)) : raw;
+    };
+    const fields = Object.fromEntries(
+      [...new Set([...Object.keys(device), ...Object.keys(attrs)])]
+        .filter((key) => !/^(Symbol|Device|Unique ID|Reuse Block|Group ID|Channel ID|Relevance)$/.test(key))
+        .map((key) => [key, resolved(key)])
+        .filter(([, value]) => value),
+    );
+    const footprintUuid = lookup("Footprint") ?? "";
     const symbolUnit: PartIr["symbolUnits"][number] = {
       id: symbolUnitId,
       unit: unitNumber,
@@ -157,12 +174,12 @@ function parseSchematicRecords(
       id: partId,
       logicalPartKey: reference,
       reference,
-      value: attrs.Value?.value ?? "",
+      value: resolved("Value") || resolved("Name"),
       symbolUnits: [symbolUnit],
-      footprint: attrs.Footprint?.value || attrs["Origin Footprint"]?.value || undefined,
+      footprint: footprintTitles.get(footprintUuid) || footprintUuid || attrs["Origin Footprint"]?.value || undefined,
       fields,
-      manufacturerRaw: attrs.Manufacturer?.value || undefined,
-      mpnRaw: attrs["Manufacturer Part"]?.value || attrs.MPN?.value || undefined,
+      manufacturerRaw: resolved("Manufacturer") || undefined,
+      mpnRaw: resolved("Manufacturer Part") || resolved("MPN") || undefined,
       variantStatus: /^(yes|true|1)$/i.test(attrs.DNP?.value ?? "") ? "dnp" : "fitted",
       pinPadMap: [],
       sourceRefs: [refForRecord(asset, component)],
@@ -172,6 +189,34 @@ function parseSchematicRecords(
     componentPartByNativeId.set(nativeId, part);
     symbolInstanceIds.push(symbolUnitId);
     output.normalized += 1;
+    // Its pins from its symbol (local change: ../NOTICE.md): the symbol's pin ends, mirrored, turned and moved as placed.
+    const symbol = symbolOf(lookup("Symbol") ?? "");
+    if (symbol) {
+      const unit = symbolUnitRecords(symbol, text(component[2]));
+      const [cx, cy, angle, mirror] = [Number(component[3]) || 0, Number(component[4]) || 0, ((Number(component[5]) || 0) * Math.PI) / 180, component[6] === 1 || component[6] === true];
+      const pinText = new Map<string, Record<string, string>>();
+      for (const record of unit) if (record[0] === "ATTR" && text(record[2])) (pinText.get(text(record[2])) ?? pinText.set(text(record[2]), {}).get(text(record[2]))!)[text(record[3])] = text(record[4]);
+      for (const record of unit) {
+        if (record[0] !== "PIN") continue;
+        const [u, v] = [Number(record[4]), Number(record[5])];
+        if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
+        const x = mirror ? -u : u;
+        const at = [cx + x * Math.cos(angle) - v * Math.sin(angle), cy + x * Math.sin(angle) + v * Math.cos(angle)].map((n) => String(Math.round(n * 1e4) / 1e4));
+        const own = pinText.get(text(record[1])) ?? {};
+        const number = own.NUMBER || text(record[1]);
+        pins.push({
+          id: stableId("pin", part.id, nativeId, text(record[1]), number),
+          partId: part.id,
+          symbolUnitId,
+          reference: part.reference,
+          number,
+          name: own.NAME ?? "",
+          position: point(at[0], at[1])!,
+          sourceRef: refForRecord(asset, component),
+        });
+        output.normalized += 1;
+      }
+    }
   }
 
   for (const [parentId, attrs] of attributes) {
@@ -223,13 +268,8 @@ function parseSchematicRecords(
     const vertices = Array.isArray(wire[2]) ? wire[2] : [];
     const wirePoints = vertices.flatMap((vertex) => {
       if (!Array.isArray(vertex) || vertex.length < 2) return [];
-      if (vertex.length >= 4) {
-        return [
-          point(text(vertex[0]), text(vertex[1]))!,
-          point(text(vertex[2]), text(vertex[3]))!,
-        ];
-      }
-      return [point(text(vertex[0]), text(vertex[1]))!];
+      // Every x, y pair: a wire's polyline holds as many as it bends (local change: ../NOTICE.md).
+      return Array.from({ length: Math.floor(vertex.length / 2) }, (_, k) => point(text(vertex[2 * k]), text(vertex[2 * k + 1]))!);
     });
     if (wirePoints.length < 2) continue;
     const wireEntity = { id: stableId("wire", schematicId, nativeId), points: wirePoints, sourceRef: refForRecord(asset, wire) };
@@ -287,9 +327,18 @@ function parseSchematicRecords(
     connectivityGraphId: stableId("connectivity", schematicId),
     sourceRefs: [ref],
   });
-  const known = new Set(["DOCTYPE", "HEAD", "OBJ", "COMPONENT", "ATTR", "WIRE"]);
+  // Styles and drawing records are drawn by the viewer from the sheet itself (local change: ../NOTICE.md, src/lib/maker/jlcpro-schematic.ts).
+  const known = new Set(["DOCTYPE", "HEAD", "OBJ", "COMPONENT", "ATTR", "WIRE", "FONTSTYLE", "LINESTYLE", "TEXT", "RECT", "POLY", "CIRCLE", "ELLIPSE", "ARC", "BUS"]);
   preserveUnknownTypes(asset, byType, known, output);
 }
+
+// The board is read by jlcpro-pcb.ts (local change: ../NOTICE.md): footprints placed from the
+// project's .efoo with their pads, arcs, fills, pours, outline and silkscreen, in millimetres.
+const PCB_RECORDS = new Set([
+  "DOCTYPE", "CANVAS", "HEAD", "ACTIVE_LAYER", "LAYER", "LAYER_PHYS", "NET", "COMPONENT", "ATTR", "PAD_NET", "PAD", "LINE", "ARC", "POLY",
+  "FILL", "VIA", "POUR", "POURED", "REGION", "STRING", "RULE", "RULE_TEMPLATE", "RULE_SELECTOR", "CONNECT", "PRIMITIVE", "PREFERENCE",
+  "SILK_OPTS", "PANELIZE", "PANELIZE_STAMP", "PANELIZE_SIDE", "GROUP", "FONT",
+]);
 
 function parsePcbRecords(
   asset: SourceAsset,
@@ -297,161 +346,18 @@ function parsePcbRecords(
   ref: SourceRef,
   output: KicadParseOutput,
   pcbNames: Map<string, string>,
+  context: JlcProBoardContext,
+  panels: Set<string>,
 ): void {
   const byType = recordsByType(records);
-  const attributes = attributeMap(records, "pcb");
   const token = withoutExtension(asset.fileName);
   const pcbName = pcbNames.get(token) ?? token;
-  const pcbId = stableId("pcb", asset.sha256, asset.relativePath);
-  const layers: PcbIr["layers"] = (byType.get("LAYER") ?? []).map((record) => {
-    const sourceId = text(record[1]);
-    const side = sourceId === "1" ? "front" : sourceId === "2" ? "back" : Number(sourceId) >= 21 && Number(sourceId) <= 50 ? "inner" : "unknown";
-    const copper = sourceId === "1" || sourceId === "2" || side === "inner";
-    return {
-      id: stableId("layer", pcbId, sourceId),
-      sourceId,
-      name: text(record[3]) || text(record[2]) || `Layer ${sourceId}`,
-      role: copper ? "copper" : /outline/i.test(text(record[2]) + text(record[3])) ? "edge" : "user",
-      side,
-      copper,
-    };
-  });
-  output.normalized += layers.length;
-  const layerName = (sourceId: string) => layers.find((layer) => layer.sourceId === sourceId)?.name ?? sourceId;
-  const footprints: PcbIr["footprints"] = [];
-  const pads: PcbIr["pads"] = [];
-  const tracks: PcbIr["tracks"] = [];
-  const vias: PcbIr["vias"] = [];
-  const zones: PcbIr["zones"] = [];
-  const footprintByNativeId = new Map<string, PcbIr["footprints"][number]>();
-  const explicitNetNames = new Set((byType.get("NET") ?? []).map((record) => text(record[1])).filter(Boolean));
-
-  for (const component of byType.get("COMPONENT") ?? []) {
-    const nativeId = text(component[1]);
-    const attrs = attributes.get(nativeId) ?? {};
-    const reference = attrs.Designator?.value || `FP${footprints.length + 1}`;
-    const footprint = {
-      id: stableId("footprint", pcbId, nativeId),
-      reference,
-      value: attrs.Value?.value ?? "",
-      libraryIdentifier: attrs.Footprint?.value ?? "",
-      position: point(text(component[4]), text(component[5])),
-      rotation: text(component[6]) || "0",
-      side: (text(component[3]) === "2" ? "back" : "front") as "front" | "back",
-      locked: false,
-      padIds: [] as string[],
-      sourceRef: refForRecord(asset, component),
-    };
-    footprints.push(footprint);
-    footprintByNativeId.set(nativeId, footprint);
-    output.normalized += 1;
-  }
-  for (const record of byType.get("PAD_NET") ?? []) {
-    const footprint = footprintByNativeId.get(text(record[1]));
-    if (!footprint) continue;
-    const number = text(record[2]);
-    const netName = text(record[3]);
-    const nativeId = text(record[4]) || `${record[1]}:${number}`;
-    if (netName) explicitNetNames.add(netName);
-    const id = stableId("pad", pcbId, footprint.id, number, nativeId);
-    footprint.padIds.push(id);
-    pads.push({
-      id,
-      footprintId: footprint.id,
-      number,
-      padType: "component",
-      shape: "source_library",
-      layers: [],
-      netId: netName ? stableId("pcb-net", pcbId, netName) : undefined,
-      sourceNativeNetId: netName || undefined,
-      netName: netName || undefined,
-      sourceRef: refForRecord(asset, record),
-    });
-    output.normalized += 1;
-  }
-  for (const record of byType.get("PAD") ?? []) {
-    const netName = text(record[3]);
-    if (netName) explicitNetNames.add(netName);
-    const orphanFootprintId = stableId("footprint", pcbId, "board-pads");
-    let footprint = footprints.find((candidate) => candidate.id === orphanFootprintId);
-    if (!footprint) {
-      footprint = {
-        id: orphanFootprintId,
-        reference: "BOARD_PAD",
-        value: "",
-        libraryIdentifier: "board_pad",
-        rotation: "0",
-        side: "front",
-        locked: false,
-        padIds: [],
-        sourceRef: ref,
-      };
-      footprints.push(footprint);
-    }
-    const id = stableId("pad", pcbId, text(record[1]));
-    footprint.padIds.push(id);
-    const shape = Array.isArray(record[9]) ? text(record[9][0]) : "unknown";
-    pads.push({
-      id,
-      footprintId: footprint.id,
-      number: text(record[5]),
-      padType: "free",
-      shape,
-      position: point(text(record[6]), text(record[7])),
-      layers: [layerName(text(record[4]))],
-      netId: netName ? stableId("pcb-net", pcbId, netName) : undefined,
-      sourceNativeNetId: netName || undefined,
-      netName: netName || undefined,
-      sourceRef: refForRecord(asset, record),
-    });
-    output.normalized += 1;
-  }
-  for (const record of byType.get("LINE") ?? []) {
-    const netName = text(record[3]);
-    if (netName) explicitNetNames.add(netName);
-    tracks.push({
-      id: stableId("track", pcbId, text(record[1])),
-      kind: "segment",
-      start: point(text(record[5]), text(record[6])),
-      end: point(text(record[7]), text(record[8])),
-      width: text(record[9]),
-      layer: layerName(text(record[4])),
-      netId: netName ? stableId("pcb-net", pcbId, netName) : undefined,
-      sourceNativeNetId: netName || undefined,
-      sourceRef: refForRecord(asset, record),
-    });
-    output.normalized += 1;
-  }
-  for (const record of byType.get("VIA") ?? []) {
-    const netName = text(record[3]);
-    if (netName) explicitNetNames.add(netName);
-    vias.push({
-      id: stableId("via", pcbId, text(record[1])),
-      position: point(text(record[5]), text(record[6])),
-      drill: text(record[7]),
-      size: text(record[8]),
-      layers: ["Top Layer", "Bottom Layer"],
-      netId: netName ? stableId("pcb-net", pcbId, netName) : undefined,
-      sourceNativeNetId: netName || undefined,
-      sourceRef: refForRecord(asset, record),
-    });
-    output.normalized += 1;
-  }
-  for (const record of byType.get("POUR") ?? []) {
-    const netName = text(record[3]);
-    if (netName) explicitNetNames.add(netName);
-    zones.push({
-      id: stableId("zone", pcbId, text(record[1])),
-      netId: netName ? stableId("pcb-net", pcbId, netName) : undefined,
-      sourceNativeNetId: netName || undefined,
-      layers: [layerName(text(record[4]))],
-      sourceRef: refForRecord(asset, record),
-    });
-    output.normalized += 1;
-  }
+  const board = readJlcProBoard(asset, records, ref, pcbName, context);
+  output.normalized += board.normalized;
+  if (board.panel) panels.add(board.pcb.id);
   output.constraints.push(
     ...(byType.get("RULE") ?? []).map((record) => ({
-      id: stableId("constraint", pcbId, text(record[1])),
+      id: stableId("constraint", board.pcb.id, text(record[1])),
       type: "jlceda_rule",
       nativeId: text(record[1]),
       record,
@@ -459,52 +365,9 @@ function parsePcbRecords(
     })),
   );
   output.normalized += (byType.get("RULE") ?? []).length;
-
-  const pcbNets: NetIr[] = Array.from(explicitNetNames).map((name) => {
-    const id = stableId("pcb-net", pcbId, name);
-    const netPads = pads.filter((pad) => pad.netId === id);
-    const netTracks = tracks.filter((track) => track.netId === id);
-    const netVias = vias.filter((via) => via.netId === id);
-    const netZones = zones.filter((zone) => zone.netId === id);
-    return {
-      id,
-      domain: "pcb_physical",
-      canonicalName: name,
-      displayNames: [name],
-      endpoints: [
-        ...netPads.map((pad) => ({ id: stableId("endpoint", id, pad.id), type: "footprint_pad" as const, targetId: pad.id, identifier: { pad: pad.number, footprintId: pad.footprintId ?? "" } })),
-        ...netTracks.map((track) => ({ id: stableId("endpoint", id, track.id), type: "track" as const, targetId: track.id, identifier: { kind: track.kind } })),
-        ...netVias.map((via) => ({ id: stableId("endpoint", id, via.id), type: "via" as const, targetId: via.id, identifier: {}, position: via.position })),
-        ...netZones.map((zone) => ({ id: stableId("endpoint", id, zone.id), type: "zone" as const, targetId: zone.id, identifier: {} })),
-      ],
-      segmentIds: netTracks.map((track) => track.id),
-      resolution: { method: "explicit", confidence: 1 },
-      sourceRefs: [ref],
-    };
-  });
-  output.nets.push(...pcbNets);
-  // Its silkscreen (local addition, ../NOTICE.md): the 3D view prints it.
-  const silkscreen = emptySilkscreen();
-  for (const record of records) easyEdaProSilk(record, silkscreen);
-  output.pcbs.push({
-    id: pcbId,
-    documentId: stableId("document", asset.sha256, asset.relativePath),
-    name: pcbName,
-    units: "mm",
-    coordinateSystem: { sourceUnits: "mm", canonicalUnits: "mm", rotationConvention: "degrees_ccw", precision: "source_token_preserved" },
-    layers,
-    stackup: (byType.get("LAYER_PHYS") ?? []).map((record) => ({ nativeId: text(record[1]), name: text(record[2]), thickness: text(record[4]) })),
-    boardOutline: [],
-    footprints,
-    pads,
-    tracks,
-    vias,
-    zones,
-    silkscreen,
-    sourceRefs: [ref],
-  });
-  const known = new Set(["DOCTYPE", "CANVAS", "HEAD", "ACTIVE_LAYER", "LAYER", "LAYER_PHYS", "NET", "COMPONENT", "ATTR", "PAD_NET", "PAD", "LINE", "VIA", "POUR", "RULE", "CONNECT"]);
-  preserveUnknownTypes(asset, byType, known, output);
+  output.nets.push(...board.nets);
+  output.pcbs.push(board.pcb);
+  preserveUnknownTypes(asset, byType, PCB_RECORDS, output);
 }
 
 function preserveUnknownTypes(
@@ -543,6 +406,26 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
   const pcbNames = new Map<string, string>();
   const partsByReference = new Map<string, PartIr>();
   let manifestFound = false;
+  // The project's devices and footprints (local change: ../NOTICE.md): boards place footprints from the .efoo files.
+  const devices = new Map<string, Record<string, string>>();
+  const footprintTitles = new Map<string, string>();
+  const footprintFiles = new Map(inputs.filter((input) => /\.efoo$/i.test(input.path)).map((input) => [withoutExtension(basename(input.path)), input]));
+  const footprintCache = new Map<string, RecordLine[] | undefined>();
+  const boardContext: JlcProBoardContext = {
+    devices,
+    footprintTitles,
+    footprint: (uuid) => {
+      if (!footprintCache.has(uuid)) footprintCache.set(uuid, footprintFiles.has(uuid) ? readRecords(footprintFiles.get(uuid)!.bytes) : undefined);
+      return footprintCache.get(uuid);
+    },
+  };
+  const panels = new Set<string>();
+  const symbolFiles = new Map(inputs.filter((input) => /\.esym$/i.test(input.path)).map((input) => [withoutExtension(basename(input.path)), input]));
+  const symbolCache = new Map<string, ProSymbol | null>();
+  const symbolOf = (uuid: string) => {
+    if (!symbolCache.has(uuid)) symbolCache.set(uuid, symbolFiles.has(uuid) ? readSymbol(symbolFiles.get(uuid)!.bytes) : null);
+    return symbolCache.get(uuid) ?? null;
+  };
 
   const easyEdaAssets = inventory
     .filter((item) => item.detectedFormat === "easyeda")
@@ -577,7 +460,9 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
         if (schematics || pcbs) {
           manifestFound = true;
           output.settings.projectManifest = manifest;
-          output.projectName ??= text(manifest.name) || Object.values(schematics ?? {}).map(asObject).find(Boolean)?.name as string | undefined || withoutExtension(asset.fileName);
+          // An exported .epro names the project (EasyEDA writes EasyEDAproject_<name>_<date>.epro); its first schematic is often just "Schematic1" (local change: ../NOTICE.md).
+          const container = /([^/]+)\.epro\//i.exec(asset.relativePath)?.[1]?.replace(/^EasyEDA(?:Pro)?[_ ]?project_/i, "").replace(/_\d{4}-\d{2}-\d{2}$/, "").replace(/_/g, " ").trim();
+          output.projectName ??= text(manifest.name) || container || Object.values(schematics ?? {}).map(asObject).find(Boolean)?.name as string | undefined || withoutExtension(asset.fileName);
           for (const [projectId, project] of Object.entries(schematics ?? {})) {
             const projectObject = asObject(project);
             if (!projectObject || !Array.isArray(projectObject.sheets)) continue;
@@ -590,6 +475,12 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
             }
           }
           for (const [id, name] of Object.entries(pcbs ?? {})) pcbNames.set(id, text(name) || id);
+          for (const [id, device] of Object.entries(asObject(manifest.devices) ?? {})) {
+            const attributes: Record<string, string> = {};
+            for (const [key, value] of Object.entries(asObject(asObject(device)?.attributes) ?? {})) attributes[key] = text(value);
+            devices.set(id, attributes);
+          }
+          for (const [id, footprint] of Object.entries(asObject(manifest.footprints) ?? {})) if (text(asObject(footprint)?.title)) footprintTitles.set(id, text(asObject(footprint)?.title));
           output.recognized += Object.keys(manifest).length;
           output.normalized += Object.keys(manifest).length;
           continue;
@@ -613,8 +504,8 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
     }
     if (asset.extension === ".esch" || asset.extension === ".epcb" || asset.extension === ".jsonl" || looksLikeRecordStream(input.bytes)) {
       const parsed = parseRecordLines(input, asset, output);
-      if (asset.extension === ".epcb" || parsed.records[0]?.[1] === "PCB") parsePcbRecords(asset, parsed.records, parsed.ref, output, pcbNames);
-      else if (asset.extension === ".esch" || parsed.records[0]?.[1] === "SCH") parseSchematicRecords(asset, parsed.records, parsed.ref, output, projectSheetNames, partsByReference);
+      if (asset.extension === ".epcb" || parsed.records[0]?.[1] === "PCB") parsePcbRecords(asset, parsed.records, parsed.ref, output, pcbNames, boardContext, panels);
+      else if (asset.extension === ".esch" || parsed.records[0]?.[1] === "SCH") parseSchematicRecords(asset, parsed.records, parsed.ref, output, projectSheetNames, partsByReference, devices, symbolOf, footprintTitles);
       else {
         const grouped = recordsByType(parsed.records);
         preserveUnknownTypes(asset, grouped, new Set(["DOCTYPE"]), output);
@@ -628,6 +519,8 @@ export function parseJlcPro(inputs: InputAsset[], inventory: SourceAsset[]): Kic
   }
 
   output.parts = Array.from(partsByReference.values());
+  // A real board first, panels last (local change: ../NOTICE.md): the viewer opens the first board.
+  output.pcbs.sort((left, right) => Number(panels.has(left.id)) - Number(panels.has(right.id)));
   output.projectName ??= withoutExtension(inventory.find((asset) => asset.detectedFormat === "easyeda")?.fileName ?? "JLCEDA project");
   output.sourceToolVersion = "JLCEDA Pro record stream";
   output.sourceFormatVersion = manifestFound ? "Pro project manifest + JSONL" : "Pro record stream";
