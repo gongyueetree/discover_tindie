@@ -233,6 +233,20 @@ export async function filesToInputAssets(files: File[]): Promise<{
       for (const [entryPath, entryBytes] of Object.entries(entries)) {
         if (entryPath.endsWith("/")) continue;
         const path = safePath(written(entryPath));
+        // A JLCEDA / EasyEDA Pro .epro is itself a ZIP (project.json, SHEET/*.esch, PCB/*.epcb,
+        // SYMBOL/*.esym…): a project ZIP from GitHub holds it whole, so open it one level down,
+        // under its own path, with the same size and ratio checks (local change: ../../NOTICE.md).
+        if (extensionOf(path) === ".epro" && hasZipSignature(entryBytes)) {
+          const inner = inspectZip(entryBytes);
+          const innerName = (name: string) => inner.get(name) ?? name;
+          const nested = unzipSync(entryBytes, { filter: (file) => !innerName(file.name).endsWith("/") && !/^FONT\//i.test(innerName(file.name)) });
+          for (const [innerPath, innerBytes] of Object.entries(nested)) {
+            totalBytes += innerBytes.byteLength;
+            if (totalBytes > LIMITS.maxCompressedBytes * 2) throw new Error("PARSER_RESOURCE_LIMIT: project exceeds 150 MB unpacked");
+            assets.push({ path: safePath(`${path}/${innerName(innerPath)}`), bytes: innerBytes });
+          }
+          continue;
+        }
         if ([".zip", ".7z", ".rar", ".tar", ".gz"].includes(extensionOf(path))) {
           diagnostics.push(
             diagnostic(
