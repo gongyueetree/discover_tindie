@@ -35,4 +35,13 @@ assert.ok(!projects.some((p) => /firmware|docs|web/.test(p.directory)), "unrelat
 
 assert.deepEqual(referencedFiles("altium/Controller.PrjPcb", "[Document1]\r\nDocumentPath=Sheets\\IO.SchDoc\r\n"), ["altium/Sheets/IO.SchDoc"]);
 assert.deepEqual(referencedFiles("kicad5/main.sch", 'EESchema Schematic File Version 4\n$Sheet\nF0 "Power" 50\nF1 "power.sch" 50\n$EndSheet\n'), ["kicad5/power.sch"]);
+// KiCad 5 writes these unquoted: project symbol libraries (sym-lib-table) and 3D models.
+assert.deepEqual(
+  referencedFiles("hardware/sym-lib-table", "(sym_lib_table\n  (lib (name -Chip)(type Legacy)(uri ${KIPRJMOD}/library/symbol/Chip.lib)(options \"\")(descr \"\"))\n  (lib (name power)(type Legacy)(uri ${KICAD_SYMBOL_DIR}/power.lib)(options \"\")(descr \"\"))\n)"),
+  ["hardware/library/symbol/Chip.lib"],
+);
+assert.deepEqual(
+  referencedFiles("hardware/PD_Micro.kicad_pcb", "(module x (model ${KIPRJMOD}/library/3d_model/Passive/C_0402.STEP\n (at (xyz 0 0 0))))(model ${KISYS3DMOD}/Diode_SMD.3dshapes/D_SOD-123.wrl"),
+  ["hardware/library/3d_model/Passive/C_0402.STEP"],
+);
 console.log("PASS: KiCad 6 / KiCad 5 / Eagle / Altium / EasyEDA / JLCEDA Pro project discovery and references");

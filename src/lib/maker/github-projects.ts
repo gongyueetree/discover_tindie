@@ -185,12 +185,14 @@ export function resolveRepoPath(parent: string, relative: string) {
 export function referencedFiles(path: string, text: string) {
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const result: string[] = [];
+  // Quoted (KiCad 6+) or bare (KiCad 5: `(model ${KIPRJMOD}/lib/x.step` and
+  // `(uri ${KIPRJMOD}/library/symbol/Chip.lib)` in sym-lib-table / fp-lib-table).
   const re =
-    /(?:\(property\s+"Sheet\s*file"\s+"([^"]+)"|\(model\s+"([^"]+)"|\(uri\s+"([^"]+)")/gi;
+    /(?:\(property\s+"Sheet\s*file"\s+"([^"]+)"|\(model\s+(?:"([^"]+)"|([^\s()"]+))|\(uri\s+(?:"([^"]+)"|([^\s()"]+)))/gi;
   for (const m of text.matchAll(re)) {
-    const raw = m[1] || m[2] || m[3];
+    const raw = m[1] || m[2] || m[3] || m[4] || m[5];
     if (!raw || /\$\{(?!KIPRJMOD)/.test(raw)) continue;
-    const resolved = resolveRepoPath(dir, raw.replace(/^\$\{KIPRJMOD\}\//, ""));
+    const resolved = resolveRepoPath(dir, raw.replace(/^\$\{KIPRJMOD\}[\\/]/, "").replace(/\\/g, "/"));
     if (resolved) result.push(resolved);
   }
   // Altium .PrjPcb: DocumentPath=Sheets\Power.SchDoc

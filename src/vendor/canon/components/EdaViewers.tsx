@@ -311,6 +311,18 @@ function pcbBounds(pcb: PcbIr): Bounds | undefined {
   ]);
 }
 
+/** Which copper a pad is on: "front" / "back" SMD, "through" (several copper layers or *.Cu), or "aperture" (paste / mask only). */
+function padSide(layers: string[]) {
+  const copper = layers.filter((l) => /cu$|copper|top layer|bottom layer|multi-?layer|^\*\.cu$/i.test(l));
+  if (!layers.length) return "through";
+  if (!copper.length) return "aperture";
+  if (copper.length > 1 || copper.some((l) => /^\*|multi/i.test(l))) return "through";
+  return /^B\.|bottom/i.test(copper[0]) ? "back" : /^F\.|top/i.test(copper[0]) ? "front" : "through";
+}
+function padOrder(layers: string[]) {
+  return { back: 0, through: 1, front: 2, aperture: 3 }[padSide(layers)];
+}
+
 function layerColor(layer = "") {
   if (/^F\.|top/i.test(layer)) return "#d94d45";
   if (/^B\.|bottom/i.test(layer)) return "#3978c7";
@@ -415,11 +427,14 @@ export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: Ca
               </g>;
 
             })}
-            {pcb.pads.filter((pad) => pad.layers.some(isVisible) || !pad.layers.length).map((pad) => {
+            {/* Pads drawn as an EDA tool does (local change: ../../NOTICE.md): back-side copper first, in the back
+                copper colour, then through-hole, then front copper; a pad that is only a paste or mask
+                opening (e.g. the paste windows over a QFN's thermal pad) is an outline, not copper. */}
+            {pcb.pads.filter((pad) => pad.layers.some(isVisible) || !pad.layers.length).sort((a,b)=>padOrder(a.layers)-padOrder(b.layers)).map((pad) => {
               const position = numericPoint(pad.position); if (!position) return null;
               const p = project(position); const sizeX = Math.max(Number(pad.size?.x ?? 1.2) * scale, .3); const sizeY = Math.max(Number(pad.size?.y ?? 1.2) * scale, .3);
               const selected = !selectedNetId || pad.netId === selectedNetId;
-              return <g className={`pcb-pad ${selected ? "" : "dimmed"} ${(selectedNetId && selected) || selectedReference===footprintById.get(pad.footprintId ?? "")?.reference ? "net-selected" : ""}`} key={pad.id} role="button" tabIndex={0}
+              return <g className={`pcb-pad ${padSide(pad.layers)} ${selected ? "" : "dimmed"} ${(selectedNetId && selected) || selectedReference===footprintById.get(pad.footprintId ?? "")?.reference ? "net-selected" : ""}`} key={pad.id} role="button" tabIndex={0}
                 aria-label={`Select pad ${pad.number} net ${pad.netName || 'unassigned'}`}
                 onPointerDown={e=>e.stopPropagation()} onClick={()=>chooseNet(pad.netId)}
                 onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseNet(pad.netId);}}}><title>{`${footprintById.get(pad.footprintId ?? "")?.reference ?? ""}.${pad.number} · ${pad.netName ?? ""}`}</title><g transform={`rotate(${-Number(pad.rotation ?? 0)} ${p.x} ${p.y})`}><rect x={p.x - sizeX / 2} y={p.y - sizeY / 2} width={sizeX} height={sizeY} rx={/circle|oval/i.test(pad.shape) ? Math.min(sizeX, sizeY) / 2 : pad.shape === "roundrect" ? Math.min(sizeX,sizeY)*.2 : 0} />{pad.drill && <ellipse cx={p.x} cy={p.y} rx={Number(pad.drill.x)*scale/2} ry={Number(pad.drill.y)*scale/2} fill={library ? "#ffffff" : "#10241f"} />}</g>{(showLabels || !!selectedNetId && selected) && <text x={library ? p.x : p.x + sizeX / 2 + 2} y={library ? p.y : p.y + 3} textAnchor={library ? "middle" : undefined} dominantBaseline={library ? "central" : undefined} style={library ? {fontSize:Math.max(1,Math.min(sizeY*.65,sizeX/(Math.max(pad.number.length,1)*.7),28)),fill:"#fff5a3"} : undefined}>{library ? pad.number : `${footprintById.get(pad.footprintId ?? "")?.reference}.${pad.number}`}</text>}</g>;

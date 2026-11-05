@@ -278,6 +278,9 @@ export async function importGithub(selection: string, projectId: string) {
       400,
     );
   const files = new Map(s.files.map((f) => [f.path, f]));
+  // Projects often name a file with other letter case than the repository holds (`C_0402.STEP` for
+  // `C_0402.step`): Windows and macOS do not care, GitHub does.
+  const byLower = new Map(s.files.map((f) => [f.path.toLowerCase(), f.path]));
   const data: Record<string, Uint8Array> = {};
   const queue = [...project.roots];
   const skipped: string[] = [];
@@ -349,8 +352,9 @@ export async function importGithub(selection: string, projectId: string) {
       /lib-table$/.test(path)
     ) {
       for (const dep of referencedFiles(path, new TextDecoder().decode(b))) {
-        const candidates = files.has(dep)
-          ? [dep]
+        const exact = files.has(dep) ? dep : byLower.get(dep.toLowerCase());
+        const candidates = exact
+          ? [exact]
           : s.files
               .filter(
                 (f) =>
