@@ -402,3 +402,18 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 另外：分钟计数改为一条 `INCRBY + EXPIRE` 脚本，计数键不会因第二条命令失败而永不过期。
 
 **仍未做**：GitHub 导入 ZIP 仍是同步压缩；浏览器端 CAD Worker；人机验证；真实 Redis 多实例、Vercel CDN 命中（`x-vercel-cache: HIT` 后额度用尽的用户仍被拒）与大文件下载需在预览环境验收。
+
+## 27. 查看器第九轮：PD_Micro、元器件信息、JLC Pro、更多格式（2026-11-05）
+
+| 问题 | 原因 | 修复 |
+|---|---|---|
+| PD_Micro 原理图大量元器件不显示、3D 只有 8/57 | KiCad 5 的 `sym-lib-table` / `fp-lib-table` 和板子里的 `(model ${KIPRJMOD}/…)` 不带引号，GitHub 导入没识别，工程自带的符号库和 3D 模型没被取下；另有文件名大小写不一致（`C_0402.STEP` vs `C_0402.step`） | `referencedFiles` 识别不带引号的写法；导入时按不区分大小写匹配仓库文件 |
+| 焊盘"尺寸不对" | 尺寸本身正确；正反面焊盘同色叠在最上层，锡膏开窗（QFN 散热焊盘上的 9 个窗）被画成铜 | 背面（蓝）→ 通孔（金）→ 正面（红）分层绘制；只有锡膏 / 阻焊层的开窗画虚线轮廓 |
+| 点击元器件只有位号、值、封装 | — | `SchematicPartInfo`：显示设计者填写的厂商、型号、描述、数据手册、LCSC 等字段；有型号（或值本身像型号）时到 Tindie 零件库查厂商、描述、封装、生命周期，并可打开零件详情；查到的结果标明来源，近似匹配会提示核对 |
+| AngstromIO（EasyEDA Pro `.epro`）无法显示 | `.epro` 本身是 ZIP，从 GitHub 导入时被包在工程 ZIP 里 | 解开一层嵌套的 `.epro`；新的 JLC Pro 渲染：原理图按 `.esym` 画符号、字段、导线、网络标签、电源符号、分区框和图框；PCB 按 `.efoo` 放置封装，画焊盘、走线、圆弧、过孔、铺铜、板框和丝印，单位改为真实毫米；默认打开单板而不是拼板；3D 显示板子、焊盘、丝印和元器件外形块 |
+| KiCad 3/4 及更早 | 旧的 `.brd`（PCBNEW-BOARD Version 1/2）没有 PCB；v3 板子改名的铜层被当成用户层 | `kicad-legacy-board.ts` 按 KiCad 自己的转换规则把旧 `.brd` 转成 `.kicad_pcb`；改名铜层映射回 F.Cu / In*.Cu / B.Cu |
+| Fusion 360 Electronics | `.fsch` / `.fbrd` 是装着 EAGLE 9 XML 的 ZIP，没被发现也没被解开 | 发现为 "Fusion Electronics"；单独上传或在工程 ZIP 里都能解开；`.f3z` 里的 `.fsch/.fbrd` 也能打开；Fusion 的 `<spline>` 板框可画 |
+| 不支持的文件只有笼统提示 | — | `unsupported-cad.ts`：点名具体文件和原因（二进制 EAGLE ≤5 请用 EAGLE 6+ 另存；`.f3d/.f3z` 是机械模型；Altium ASCII PcbDoc；gEDA、OrCAD、Protel 99、DipTrace、Proteus、PADS、Fritzing） |
+| 3D 板框不闭合 | 板框在拐角处多出一点、重复描边或有零散线段 | 严格拼接失败后第二轮容忍这些情况（仍拒绝真正的缺口） |
+
+实测仓库与截图见 PR 描述。仍未支持：二进制 EAGLE ≤5、Altium ASCII PcbDoc、gEDA / OrCAD 等其他工具；JLC Pro 的图片 / Logo、真实 3D 模型（EasyEDA 模型库）、拼板 3D（板框重叠）。
