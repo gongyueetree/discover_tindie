@@ -24,6 +24,7 @@ const REASON: Record<string, string> = {
   no_footprint_in_database: "No footprint is recorded for this part.",
   not_in_official_kicad_library: "Not in the official KiCad library or ezPLM's library.",
   not_previewable: "This file could not be drawn.",
+  ezplm_unavailable: "ezPLM's library has this file, but it could not be fetched right now. Try again later.",
   no_model: "The footprint references no 3D model.",
 };
 
