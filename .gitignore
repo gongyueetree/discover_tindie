@@ -15,3 +15,6 @@ node_modules
 *.tsbuildinfo
 
 .qa/
+
+# Claude Code sub-agent worktrees (temporary)
+.claude/worktrees/
