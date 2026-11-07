@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect } from "react";
 import { BookOpen, Cpu, CircuitBoard, LayoutGrid } from "lucide-react";
 
 /**
@@ -15,8 +16,33 @@ export const TOOL_LINKS = [
   { href: "/tools/planner", label: "PCB planner", icon: LayoutGrid, match: ["/tools/planner", "/tools/bom"] },
 ];
 
+/** Tab ids counted by the admin dashboard's Discover traffic (lib/maker-analytics.ts). */
+const PAGE_IDS: Record<string, string> = {
+  "/": "resources",
+  "/tools/components": "components",
+  "/tools/circuits": "open-hardware",
+  "/tools/planner": "pcb-planner",
+};
+
+/** One anonymous page view per tab opened (fire and forget; never affects the page). */
+function usePageView(path: string) {
+  useEffect(() => {
+    const link = TOOL_LINKS.find((t) => t.match.includes(path));
+    const page = link && PAGE_IDS[link.href];
+    if (!page) return;
+    const body = JSON.stringify({ page });
+    try {
+      if (navigator.sendBeacon?.("/api/track/page", new Blob([body], { type: "application/json" }))) return;
+    } catch {
+      /* fall back to fetch */
+    }
+    fetch("/api/track/page", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+  }, [path]);
+}
+
 export function ToolShell({ children, tools = true }: { children: React.ReactNode; tools?: boolean }) {
   const path = usePathname() || "/";
+  usePageView(path);
   // While the new tabs are in preview, the public sees the original page without a tab bar.
   if (!tools) return <div className="maker">{children}</div>;
   return (

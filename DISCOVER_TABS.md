@@ -417,3 +417,17 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 | 3D 板框不闭合 | 板框在拐角处多出一点、重复描边或有零散线段 | 严格拼接失败后第二轮容忍这些情况（仍拒绝真正的缺口） |
 
 实测仓库与截图见 PR 描述。仍未支持：二进制 EAGLE ≤5、Altium ASCII PcbDoc、gEDA / OrCAD 等其他工具；JLC Pro 的图片 / Logo、真实 3D 模型（EasyEDA 模型库）、拼板 3D（板框重叠）。
+
+## 28. 管理后台：Discover 访问统计（2026-11-07）
+
+后台左侧新增「📈 Discover traffic」：
+
+- **四个板块**（Resources / Components / Open hardware / PCB planner）的页面访问量和每日独立访客，可选 7 天 / 30 天 / 90 天 / 1 年；每日流量曲线（悬停显示当天各板块数字，线尾直接标注，可切换为表格）。
+- **搜索关键词**：Components 搜索、Open hardware 按型号搜索、PCB planner 器件搜索、从 GitHub 导入的仓库，以及被打开最多的设计和器件；每个词显示次数和"没有结果"的次数，右侧单列"搜了但什么都没找到"的词（可以据此补数据）。零件库出错的搜索不算"没有结果"。
+
+实现（`src/lib/maker-analytics.ts`）：
+- 页面访问由标签栏（`ToolShell`）发一次 `POST /api/track/page`；爬虫（按 User-Agent）不计；按 IP 限流。
+- 搜索与打开在服务端 Maker API 里记录，不依赖浏览器上报；记录失败不影响访客。
+- 三张按天汇总的表（`maker_traffic_daily` / `maker_visitors_daily` / `maker_terms_daily`），首次使用时自动建表（`drizzle/0004_maker_analytics.sql` 是同样的 SQL）。
+- 隐私：不存 IP 和 Cookie。独立访客用「当天日期 + 匿名会话或 IP + 服务器密钥」的哈希，每天都不同，无法跨天追踪同一个人；超过 400 天的访客哈希自动删除。搜索词统一小写、合并空格、最长 80 字符。
+- 统计从部署当天开始，没有历史数据。
