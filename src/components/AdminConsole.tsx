@@ -4,6 +4,7 @@ import { PartdataStatus } from "@/components/PartdataStatus";
 import { useRouter } from "next/navigation";
 import { DAILY_TARGET, taxName, TAXONOMY } from "@/lib/taxonomy";
 import { AnalyticsPanel } from "@/components/AnalyticsPanel";
+import { MakerTrafficPanel } from "@/components/MakerTrafficPanel";
 import { ContentStatsPanel } from "@/components/ContentStatsPanel";
 
 type Disc = any; type Res = any; type Src = any; type Sub = any;
@@ -12,7 +13,7 @@ type Stats = { needsReview: number; scheduled: number; approvedToday: number; br
 export function AdminConsole({ inbox, published, resources, sources, submissions, stats, recommendations, analytics, contentStats }:
   { inbox: Disc[]; published: Disc[]; resources: Res[]; sources: Src[]; submissions: Sub[]; stats: Stats; recommendations?: any[]; analytics?: any[]; contentStats?: any }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"dash" | "inbox" | "dir" | "src" | "picks" | "mod" | "rec">("dash");
+  const [tab, setTab] = useState<"dash" | "traffic" | "inbox" | "dir" | "src" | "picks" | "mod" | "rec">("dash");
   const [busy, setBusy] = useState(false);
 
   async function call(url: string, body: any) {
@@ -35,7 +36,7 @@ export function AdminConsole({ inbox, published, resources, sources, submissions
       {/* sidebar */}
       <aside style={{ width: 220, background: "#0f343f", color: "#cfe1e6", flex: "none", padding: "0" }}>
         <div style={{ padding: "18px 20px", fontWeight: 700, fontSize: 18, color: "#fff", borderBottom: "1px solid #1d5163" }}>tindie<span style={{ color: "#f2762e" }}>.</span> <span style={{ fontSize: 11, color: "#7fa0a9", fontWeight: 400 }}>Admin</span></div>
-        {[["dash", "📊 Dashboard"], ["inbox", `📥 Discovery Inbox (${inbox.length})`], ["dir", "📚 Resource Directory"], ["src", "🔗 Sources"], ["picks", "🧩 Design Picks"], ["mod", `🛡️ Moderation (${submissions.length})`], ["rec", "📣 Recommendations"]].map(([k, label]) => (
+        {[["dash", "📊 Dashboard"], ["traffic", "📈 Discover traffic"], ["inbox", `📥 Discovery Inbox (${inbox.length})`], ["dir", "📚 Resource Directory"], ["src", "🔗 Sources"], ["picks", "🧩 Design Picks"], ["mod", `🛡️ Moderation (${submissions.length})`], ["rec", "📣 Recommendations"]].map(([k, label]) => (
           <div key={k} onClick={() => setTab(k as any)} style={{ padding: "11px 20px", fontSize: 13.5, cursor: "pointer", borderLeft: `3px solid ${tab === k ? "#f2762e" : "transparent"}`, background: tab === k ? "#16404d" : "transparent", color: tab === k ? "#fff" : "#cfe1e6" }}>{label}</div>
         ))}
         <div style={{ padding: "14px 20px", fontSize: 11, color: "#5f808a", marginTop: 20 }}>Connected to live database</div>
@@ -48,6 +49,7 @@ export function AdminConsole({ inbox, published, resources, sources, submissions
         </div>
         <div style={{ padding: "24px 26px 60px" }}>
           {tab === "dash" && <Dashboard stats={stats} inbox={inbox} analytics={analytics} contentStats={contentStats} />}
+          {tab === "traffic" && <MakerTrafficPanel />}
           {tab === "inbox" && <Inbox inbox={inbox} published={published} call={call} callJson={callJson} />}
           {tab === "dir" && <Directory resources={resources} call={call} />}
           {tab === "src" && <Sources sources={sources} call={call} />}
