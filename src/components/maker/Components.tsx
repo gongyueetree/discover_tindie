@@ -188,6 +188,7 @@ export default function Components() {
             .map((s) => (
               <span key={s.source} className={s.status} title={s.message}>
                 {s.source} · {s.status === "ready" ? "connected" : "unavailable"}
+                {s.status === "error" && s.message ? <small> — {s.message}</small> : null}
               </span>
             ))}
         </div>

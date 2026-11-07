@@ -26,6 +26,7 @@ const SCOPES: [string, string][] = [
   ["github-import", "Imported from GitHub"],
   ["open:design", "Designs opened"],
   ["open:part", "Parts opened"],
+  ["error:partdata", "Parts database errors"],
 ];
 const INK = "#2f3438", INK2 = "#5a6b72", MUTED = "#8a9499", LINE = "#e3e9eb", GRID = "#eef2f3";
 const fmt = (n: number) => n.toLocaleString("en-US");
@@ -73,7 +74,7 @@ export function MakerTrafficPanel() {
 
   const all = PAGES.reduce((a, p) => ({ views: a.views + view.totals[p.id].views, visitors: a.visitors + view.totals[p.id].visitors }), { views: 0, visitors: 0 });
   const terms = (data?.terms || []).filter((t) => t.scope === scope);
-  const emptyTerms = (data?.terms || []).filter((t) => t.empty > 0 && !t.scope.startsWith("open:")).sort((a, b) => b.empty - a.empty).slice(0, 15);
+  const emptyTerms = (data?.terms || []).filter((t) => t.empty > 0 && !/^(open|error):/.test(t.scope)).sort((a, b) => b.empty - a.empty).slice(0, 15);
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${LINE}`, borderRadius: 8, padding: 18, marginBottom: 22 }}>
@@ -134,7 +135,7 @@ export function MakerTrafficPanel() {
             ))}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)", gap: 16 }}>
-            <TermTable rows={terms} showEmpty={!scope.startsWith("open:")} />
+            <TermTable rows={terms} showEmpty={!/^(open|error):/.test(scope)} />
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>Searches that found nothing</div>
               {emptyTerms.length ? (

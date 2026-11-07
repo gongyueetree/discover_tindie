@@ -99,6 +99,18 @@ function remember(key: string, load: () => Promise<any>) {
   return value;
 }
 
+/**
+ * Admin → Discover traffic → "Parts database errors": which kind of failure, on which endpoint, how
+ * often per day (lib/maker-analytics.ts). Best-effort; never affects the request.
+ */
+function noteFailure(path: string, kind: string, ms: number) {
+  const endpoint = path.replace(/\/(p|d)_[a-z2-7]+/g, "/{id}").replace(/\/families\/[^/]+/, "/families/{family}").slice(0, 60);
+  console.error("[partdata]", kind, endpoint, `${ms} ms`);
+  void import("@/lib/maker-analytics")
+    .then(({ recordTerm }) => recordTerm("error:partdata", `${kind} · ${endpoint}`))
+    .catch(() => undefined);
+}
+
 const MESSAGES: Record<string, string> = {
   unauthorized: "The data service rejected this site's credentials.",
   bad_signature: "The data service rejected this site's request signature.",
@@ -124,6 +136,7 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
   const ts = Math.floor(Date.now() / 1000).toString();
   const nonce = randomBytes(12).toString("hex");
   let res: Response;
+  const t0 = Date.now();
   try {
     res = await fetch(`${BASE()}${path}${qs ? "?" + qs : ""}`, {
       method,
@@ -141,9 +154,19 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
       },
       body: raw || undefined,
     });
-  } catch {
-    throw new PartdataError("The parts database is unreachable right now. Please retry.", 502, "unreachable", true);
+  } catch (e) {
+    // A timeout (the request's time ran out) and a failed connection are told apart: only the
+    // second is worth an immediate retry (pdGet), and both are recorded for the admin dashboard.
+    const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+    noteFailure(path, timedOut ? "timeout" : "unreachable", Date.now() - t0);
+    throw new PartdataError(
+      timedOut ? "The parts database did not answer in time. Please retry." : "The parts database is unreachable right now. Please retry.",
+      timedOut ? 504 : 502,
+      timedOut ? "timeout" : "unreachable",
+      true,
+    );
   }
+  if (!res.ok && res.status !== 404) noteFailure(path, `HTTP ${res.status}`, Date.now() - t0);
   const json = await res.json().catch(() => null);
   if (!res.ok) {
     // FastAPI wraps HTTPException detail as {"detail": {...}}; KG routes return {"error": {...}} directly.
@@ -170,7 +193,9 @@ export function pdGet(path: string, query: Query = {}, visitor?: string): Promis
   const once = () => send("GET", path, query, undefined, visitor);
   return remember(`GET ${path}?${canonicalQuery(query)}`, () =>
     once().catch(async (e) => {
-      if (!(e instanceof PartdataError) || e.status < 500 || e.code === "unreachable" || remainingMs() < 5_000) throw e;
+      // Server errors and failed connections (a restart, a dropped connection) are tried once more;
+      // a timeout is not (the time is already spent).
+      if (!(e instanceof PartdataError) || e.status < 500 || e.code === "timeout" || remainingMs() < 5_000) throw e;
       await new Promise((r) => setTimeout(r, 400));
       return once();
     }),

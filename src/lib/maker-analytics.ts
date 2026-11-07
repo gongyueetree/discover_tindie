@@ -35,6 +35,7 @@ export const SCOPES = {
   "github-import": "Import from GitHub",
   "open:part": "Parts opened",
   "open:design": "Designs opened",
+  "error:partdata": "Parts database errors",
 } as const;
 export type Scope = keyof typeof SCOPES;
 
