@@ -431,3 +431,12 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 - 三张按天汇总的表（`maker_traffic_daily` / `maker_visitors_daily` / `maker_terms_daily`），首次使用时自动建表（`drizzle/0004_maker_analytics.sql` 是同样的 SQL）。
 - 隐私：不存 IP 和 Cookie。独立访客用「当天日期 + 匿名会话或 IP + 服务器密钥」的哈希，每天都不同，无法跨天追踪同一个人；超过 400 天的访客哈希自动删除。搜索词统一小写、合并空格、最长 80 字符。
 - 统计从部署当天开始，没有历史数据。
+
+## 29. "Tindie parts database unavailable" 排查（2026-11-07）
+
+搜索元器件时网站同时向零件库发两个请求（精确型号 + 前缀搜索），两个都失败才显示 "unavailable"。常见原因：零件库服务重启 / 部署中、连接中断、超时（20 秒）、零件库返回 5xx（例如并发写对外 ID 的冲突，已在 ezplm_partdata#4 修复，需零件库重新部署）。
+
+- 连接中断和 5xx 自动重试一次；超时不重试（时间已用完），提示 "did not answer in time"。
+- 搜索结果上方的状态里直接显示失败原因，不再只写 "unavailable"。
+- 每次失败记到后台：Discover traffic →「Parts database errors」，按天显示类型（timeout / unreachable / HTTP 5xx）和接口，便于判断是零件库宕机、变慢还是报错。
+- 也可在登录后台后打开 `/api/admin/partdata` 查看零件库的连接状态、延迟和今天剩余额度。
