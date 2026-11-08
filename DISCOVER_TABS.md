@@ -441,6 +441,19 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 - 每次失败记到后台：Discover traffic →「Parts database errors」，按天显示类型（timeout / unreachable / HTTP 5xx）和接口，便于判断是零件库宕机、变慢还是报错。
 - 也可在登录后台后打开 `/api/admin/partdata` 查看零件库的连接状态、延迟和今天剩余额度。
 
+## 30. 加载速度：减少对零件库和 GitHub 的请求（2026-11-08）
+
+零件库 key 的拒绝数为 0，慢不是额度造成的，而是每个页面请求太多、缓存不共享：
+
+| 之前 | 现在 |
+|---|---|
+| Open hardware 每张卡片各自查一次零件库（是否能打开 + 图片），约 2 次 / 卡 | 列表里已有的设计信息记下来（本实例内存 + Redis 共享，1 天），卡片检查不再查零件库；本地实测 16 张卡片的页面，零件库只收到 3 次请求 |
+| 每张卡片一个"能否打开"请求 | 可见卡片合并成一个请求（`POST /api/maker/circuits/usable`，每次最多 48 个） |
+| 零件库答案只缓存在各个 Serverless 实例的内存里（多数时候是冷的） | 再加一层 Upstash Redis 共享缓存（10 分钟，只存公共数据，出错不缓存） |
+| 每个实例重新扫描 GitHub 仓库 / README / 文件夹图片 | 结果放进共享缓存：仓库是否可打开（固定 commit 7 天、分支 1 天）、README 与图片（1 天）；GitHub 拒绝时不缓存 |
+| 零件库生成一个模块的设计列表时，每个设计单独查一次对外 ID（最多 2000 次查询） | 一次查询 + 一次批量写入（ezplm_partdata）；设计列表在零件库内缓存 15 分钟（原 5 分钟） |
+
+建议同时在 Vercel 设置 `MAKER_GITHUB_TOKEN`（只读 GitHub token），把 GitHub 的上限从每小时 60 次提高到 5000 次。
 ## 31. PCB planner：点选器件显示完整信息（2026-11-08）
 
 在板上点选一个器件，右侧面板显示：型号（可打开零件详情、价格和替代件）、厂商、描述、封装名、数据手册链接，以及原理图符号、封装、3D 模型三栏预览（与 Components 页同一个组件 `CadPreview`），三者都可下载。3D 模型新增下载链接（Components 页也受益）。
