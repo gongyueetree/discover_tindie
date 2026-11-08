@@ -191,14 +191,21 @@ export function pdGet(path: string, query: Query = {}, visitor?: string): Promis
   // A GET that fails with a server error (500/503) is tried once more after a short pause, when the
   // request still has time: a passing hiccup should not show the visitor an error banner.
   const once = () => send("GET", path, query, undefined, visitor);
-  return remember(`GET ${path}?${canonicalQuery(query)}`, () =>
+  const key = `GET ${path}?${canonicalQuery(query)}`;
+  const fetchIt = () =>
     once().catch(async (e) => {
       // Server errors and failed connections (a restart, a dropped connection) are tried once more;
       // a timeout is not (the time is already spent).
       if (!(e instanceof PartdataError) || e.status < 500 || e.code === "timeout" || remainingMs() < 5_000) throw e;
       await new Promise((r) => setTimeout(r, 400));
       return once();
-    }),
+    });
+  // This instance's memory first, then the cache shared by all instances (Redis), then partdata.
+  // Errors are never stored. The answers are the same for every visitor (X-End-User only meters).
+  return remember(key, () =>
+    import("@/lib/maker/limits").then(({ sharedValue }) =>
+      sharedValue(`mk:pd:${createHash("sha256").update(key).digest("base64url").slice(0, 32)}`, TTL / 1000, fetchIt),
+    ),
   );
 }
 
