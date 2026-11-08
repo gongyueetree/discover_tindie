@@ -217,7 +217,32 @@ async function designPool(filter: DesignFilter, visitor: string) {
   );
   const out: DesignCard[] = [...firstItems, ...rest.flat()];
   const seen = new Set<string>();
-  return dedupeDesigns(out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id)));
+  const list = dedupeDesigns(out.filter((d) => keep(d) && !seen.has(d.id) && seen.add(d.id)));
+  rememberDesigns(out);
+  return list;
+}
+
+/* Each card of a design list, kept for a day (this instance's memory and the shared cache), so the
+   per-card requests that follow (can it be opened? which picture?) need no parts-database call. */
+const knownDesigns = new Map<string, { until: number; d: DesignCard }>();
+function rememberDesigns(list: DesignCard[]) {
+  const until = Date.now() + 86_400_000;
+  if (knownDesigns.size > 20_000) knownDesigns.clear();
+  for (const d of list) knownDesigns.set(d.id, { until, d });
+  void import("@/lib/maker/limits").then(({ sharedPutMany }) => sharedPutMany(list.map((d) => [`mk:design:${d.id}`, d]), 86_400));
+}
+
+/** A design's card as a list showed it (no parts-database call), else its details. */
+export async function designCard(id: string, visitor: string): Promise<DesignCard> {
+  const mem = knownDesigns.get(id);
+  if (mem && mem.until > Date.now()) return mem.d;
+  const { sharedPeek } = await import("@/lib/maker/limits");
+  const shared = await sharedPeek<DesignCard>(`mk:design:${id}`);
+  if (shared?.id === id) {
+    knownDesigns.set(id, { until: Date.now() + 86_400_000, d: shared });
+    return shared;
+  }
+  return designDetail(id, visitor);
 }
 
 export async function designsBy(filter: DesignFilter, offset: number, visitor: string, limit = 20) {

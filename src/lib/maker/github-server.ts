@@ -3,6 +3,7 @@ import { sharedFetchSignal } from "./request-context";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { zipSync } from "fflate";
 import { SourceError } from "./server";
+import { sharedValue } from "./limits";
 import { boundedBody } from "@/vendor/canon/lib/allegro-http";
 import {
   discoverProjects,
@@ -476,7 +477,8 @@ export function githubReadme(repo: string, commit: string | null, subdir = ""): 
   if (readmes.size > 1000) readmes.clear();
   // A lookup GitHub refused (quota, outage) is not "no README": keep it only briefly.
   let failed = false;
-  const value = (async (): Promise<ReadmeInfo> => {
+  // Shared by every instance through Redis (sharedValue); a lookup GitHub refused is not stored.
+  const value = sharedValue(`mk:gh:readme:${key}`, 86_400, async (): Promise<ReadmeInfo> => {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || (commit && !/^[\w.-]{1,100}$/.test(commit))) return { intro: null, image: null, readmeUrl: null };
     const ref = commit ? `?ref=${commit}` : "";
     const dirs = [...new Set([subdir.replace(/^\/+|\/+$/g, ""), ""])];
@@ -494,7 +496,7 @@ export function githubReadme(repo: string, commit: string | null, subdir = ""): 
       }
     }
     return { intro: null, image: null, readmeUrl: null };
-  })();
+  }, () => !failed);
   readmes.set(key, { until: Date.now() + 86_400_000, value });
   value.then(() => {
     if (failed) readmes.set(key, { until: Date.now() + 10 * 60_000, value });
@@ -522,7 +524,7 @@ export function githubFolderImage(repo: string, commit: string | null, subdir: s
   if (hit && hit.until > Date.now()) return hit.value;
   if (folderImages.size > 1000) folderImages.clear();
   let failed = false;
-  const value = (async () => {
+  const value = sharedValue(`mk:gh:folderimg:${key}`, 86_400, async (): Promise<string | null> => {
     let tree: any;
     try {
       tree = await github(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
@@ -544,7 +546,7 @@ export function githubFolderImage(repo: string, commit: string | null, subdir: s
       .filter((x): x is { path: string; score: number } => !!x && x.score > 0)
       .sort((a, b) => b.score - a.score || a.path.length - b.path.length);
     return scored[0] ? `https://raw.githubusercontent.com/${repo}/${ref}/${scored[0].path.split("/").map(encodeURIComponent).join("/")}` : null;
-  })();
+  }, () => !failed);
   folderImages.set(key, { until: Date.now() + 86_400_000, value });
   value.then(() => {
     if (failed) folderImages.set(key, { until: Date.now() + 10 * 60_000, value });
@@ -582,7 +584,9 @@ export function githubUsable(url: string): Promise<boolean | null> {
   if (hit && hit.until > Date.now()) return hit.value;
   if (usable.size > 2000) usable.clear();
   const pinned = /\/tree\/[0-9a-f]{40}(\/|$)/.test(url);
-  const value = (async (): Promise<boolean | null> => {
+  // A whole repository scan per design: shared through Redis, so each repository is scanned once
+  // for every instance and visitor (a pinned commit for a week, a branch for a day).
+  const value = sharedValue(`mk:gh:usable:${url}`, (pinned ? 7 : 1) * 86_400, async (): Promise<boolean | null> => {
     try {
       const scan = await scanGithub(url);
       const snap = snapshots.get(scan.token.split(".")[0]);
@@ -596,7 +600,7 @@ export function githubUsable(url: string): Promise<boolean | null> {
       if (e instanceof SourceError && (e.status === 404 || e.status === 413)) return false;
       return null;
     }
-  })();
+  }, (v) => v !== null);
   usable.set(url, { until: Date.now() + (pinned ? 7 : 1) * 86_400_000, value });
   value.then((v) => {
     if (v === null) usable.set(url, { until: Date.now() + 10 * 60_000, value });

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { search, SourceError, rateLimit, asSourceError, suppliersConnected } from "@/lib/maker/server";
 import { chunkStream, peekStream } from "@/lib/maker/stream-body";
 import { admitFile, meteredStream, noteResource, withTaskSlot } from "@/lib/maker/limits";
+import { mapLimit } from "@/vendor/bom2buy/digikey";
 import { noteAsync, recordTerm } from "@/lib/maker-analytics";
 import { identify } from "@/lib/maker/identify";
 import { matchRow } from "@/lib/maker/bom";
@@ -14,6 +15,7 @@ import {
   partDetail,
   designsBy,
   designDetail,
+  designCard,
   githubSource,
   matchLines,
   familyInfo,
@@ -208,7 +210,7 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
       });
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "cover") {
       // For a parts database whose design list does not carry pictures yet: one design's picture.
-      const d = await designDetail(a, visitor);
+      const d = await designCard(a, visitor);
       const gh = d.kind === "open_source" ? githubRepoOf(d.sourceUrl) : null;
       result = {
         url:
@@ -224,11 +226,20 @@ async function handleRequest(req: NextRequest, { params }: { params: { path: str
       };
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "usable") {
       // Whether the design's repository holds files the viewer can open (null = could not tell).
-      const d = await designDetail(a, visitor);
-      result = { usable: d.kind === "vendor" ? true : /^https:\/\/github\.com\//.test(d.sourceUrl) ? await githubUsable(d.sourceUrl) : null };
+      result = { usable: await usableDesign(a, visitor) };
+    } else if (req.method === "POST" && head === "circuits" && path.length === 2 && a === "usable") {
+      // The same for every card on screen at once (one request instead of one per card).
+      const body = await jsonBody(req, 4000);
+      const ids: string[] = Array.isArray(body.ids) ? [...new Set(body.ids.filter((x: unknown) => typeof x === "string" && DESIGN_ID.test(x)))].slice(0, 48) as string[] : [];
+      if (!ids.length) throw new SourceError("Name the designs to check.", 400);
+      const out: Record<string, boolean | null> = {};
+      await mapLimit(ids, 6, async (id) => {
+        out[id] = await usableDesign(id, visitor).catch(() => null);
+      });
+      result = { usable: out };
     } else if (req.method === "GET" && head === "circuits" && path.length === 3 && DESIGN_ID.test(a) && path[2] === "about") {
       // Short introduction from the repository README (open-source designs only).
-      const d = await designDetail(a, visitor);
+      const d = await designCard(a, visitor);
       const gh = d.kind === "open_source" ? githubRepoOf(d.sourceUrl) : null;
       const info = gh ? await githubReadme(gh.repo, gh.commit, gh.subdir) : null;
       result = { intro: info?.intro || null, readmeUrl: info?.readmeUrl || null };
@@ -469,3 +480,9 @@ const charged = async (req: NextRequest, ctx: { params: Promise<{ path: string[]
 };
 export const GET = charged;
 export const POST = charged;
+
+/** Whether a design's repository holds files the viewer can open (null = could not tell). */
+async function usableDesign(id: string, visitor: string): Promise<boolean | null> {
+  const d = await designCard(id, visitor);
+  return d.kind === "vendor" ? true : /^https:\/\/github\.com\//.test(d.sourceUrl) ? await githubUsable(d.sourceUrl) : null;
+}

@@ -156,6 +156,23 @@ export function luaRedis(opts: { now?: () => number; delay?: number } = {}) {
       await wait();
       return command("EXPIRE", [k, String(s)]);
     },
+    /** Upstash-style pipeline: commands queued, run in order by exec(). */
+    pipeline() {
+      const queued: (() => Promise<unknown>)[] = [];
+      const self = this;
+      const p = {
+        set(k: string, v: any, o: any = {}) {
+          queued.push(() => self.set(k, v, o));
+          return p;
+        },
+        async exec() {
+          const out = [];
+          for (const q of queued) out.push(await q());
+          return out;
+        },
+      };
+      return p;
+    },
     async eval(script: string, keys: string[], args: string[]) {
       await wait();
       this.evals++;

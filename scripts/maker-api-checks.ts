@@ -105,6 +105,17 @@ async function main() {
   // designs for a part
   r = await get("references/p_aaaaaaaaaa");
   d = await r.json();
+  // The cards just listed are remembered: checking several at once (one POST) needs no further
+  // parts-database call (a vendor design is openable by definition, so no GitHub call either).
+  const beforeUsable = calls.length;
+  r = await POST(new NextRequest("http://localhost/api/maker/circuits/usable", { method: "POST", body: JSON.stringify({ ids: ["d_eeeeeeeeee", "d_eeeeeeeeee", "not-an-id"] }) }), { params: Promise.resolve({ path: ["circuits", "usable"] }) });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await r.json()).usable, { d_eeeeeeeeee: true }, "one answer per valid, distinct id");
+  assert.equal(calls.length, beforeUsable, "no parts-database call for a design the list already returned");
+  r = await POST(new NextRequest("http://localhost/api/maker/circuits/usable", { method: "POST", body: JSON.stringify({ ids: [] }) }), { params: Promise.resolve({ path: ["circuits", "usable"] }) });
+  assert.equal(r.status, 400);
+  r = await get("references/p_aaaaaaaaaa");
+  d = await r.json();
   assert.deepEqual(d.items.map((x: any) => x.id).sort(), ["d_cccccccccc", "d_eeeeeeeeee"], "0-star open source dropped, vendor kept");
   assert.equal(d.items.find((x: any) => x.kind === "vendor").vendor, "Texas Instruments", "vendor named from its site");
   assert.equal(calls.at(-1)!.url.searchParams.get("part"), "p_aaaaaaaaaa");

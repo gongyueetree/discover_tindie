@@ -522,3 +522,46 @@ export async function withTaskSlot<T>(fn: () => Promise<T>, max = 2, network = 6
     else keys.forEach((k) => localSlots.get(k)?.delete(token));
   }
 }
+
+/* ------------------------------------------------------------------ 7. shared cache for public data */
+
+/**
+ * Answers every visitor gets the same (parts database lists and details, GitHub repository facts),
+ * shared through Redis so all serverless instances reuse them — each instance's memory cache alone
+ * is cold most of the time. Public data only (no visitor-specific or private values). Best-effort:
+ * without Redis, or if it fails or is slow, `load` simply runs. Values are wrapped ({ v }) so a
+ * stored null ("no picture") is told apart from a miss; values over ~400 KB are not stored.
+ */
+export async function sharedValue<T>(key: string, ttlSeconds: number, load: () => Promise<T>, store: (v: T) => boolean = () => true): Promise<T> {
+  const r = redis;
+  if (r) {
+    const hit = await r.get<{ v: T }>(key).catch(() => null);
+    if (hit && typeof hit === "object" && "v" in hit) return hit.v;
+  }
+  const value = await load();
+  if (r && store(value)) {
+    const body = { v: value };
+    if (JSON.stringify(body).length <= 400_000)
+      void outsideRequest(() => r.set(key, body, { ex: Math.max(1, Math.floor(ttlSeconds)) })).catch(() => undefined);
+  }
+  return value;
+}
+
+/** Store several shared values in one round trip (see sharedValue; same { v } wrapping). */
+export async function sharedPutMany(entries: [string, unknown][], ttlSeconds: number) {
+  const r = redis;
+  if (!r || !entries.length) return;
+  await outsideRequest(async () => {
+    const p = r.pipeline();
+    for (const [k, v] of entries) p.set(k, { v }, { ex: Math.max(1, Math.floor(ttlSeconds)) });
+    await p.exec();
+  }).catch(() => undefined);
+}
+
+/** A value stored by sharedValue / sharedPutMany, or undefined when there is none (or no Redis). */
+export async function sharedPeek<T>(key: string): Promise<T | undefined> {
+  const r = redis;
+  if (!r) return undefined;
+  const hit = await r.get<{ v: T }>(key).catch(() => null);
+  return hit && typeof hit === "object" && "v" in hit ? hit.v : undefined;
+}
