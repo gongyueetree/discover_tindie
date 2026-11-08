@@ -440,3 +440,10 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 - 搜索结果上方的状态里直接显示失败原因，不再只写 "unavailable"。
 - 每次失败记到后台：Discover traffic →「Parts database errors」，按天显示类型（timeout / unreachable / HTTP 5xx）和接口，便于判断是零件库宕机、变慢还是报错。
 - 也可在登录后台后打开 `/api/admin/partdata` 查看零件库的连接状态、延迟和今天剩余额度。
+
+## 31. PCB planner：点选器件显示完整信息（2026-11-08）
+
+在板上点选一个器件，右侧面板显示：型号（可打开零件详情、价格和替代件）、厂商、描述、封装名、数据手册链接，以及原理图符号、封装、3D 模型三栏预览（与 Components 页同一个组件 `CadPreview`），三者都可下载。3D 模型新增下载链接（Components 页也受益）。
+
+- 新放置的器件会记下零件库 ID；旧的板子按完整型号到零件库查找。
+- 只从 KiCad 库挑的封装（没有对应零件）：说明没有符号和 3D，仍可下载该封装文件（.kicad_mod）。

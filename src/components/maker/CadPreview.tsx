@@ -108,7 +108,9 @@ export default function CadPreview({ partId, mpn }: { partId: string; mpn: strin
           {cell(
             "3D model",
             modelName,
-            undefined,
+            data.model
+              ? data.model.url || "/api/models/kicad?" + new URLSearchParams({ path: modelPath, revision: data.model.revision || "master" })
+              : undefined,
             data.model ? <StepViewer key={modelPath} load={loadModel} label={`3D model ${modelName}`} /> : empty(footprint ? "no_model" : data.footprint?.reason),
           )}
         </div>
