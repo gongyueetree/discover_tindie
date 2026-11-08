@@ -454,3 +454,9 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 | 零件库生成一个模块的设计列表时，每个设计单独查一次对外 ID（最多 2000 次查询） | 一次查询 + 一次批量写入（ezplm_partdata）；设计列表在零件库内缓存 15 分钟（原 5 分钟） |
 
 建议同时在 Vercel 设置 `MAKER_GITHUB_TOKEN`（只读 GitHub token），把 GitHub 的上限从每小时 60 次提高到 5000 次。
+## 31. PCB planner：点选器件显示完整信息（2026-11-08）
+
+在板上点选一个器件，右侧面板显示：型号（可打开零件详情、价格和替代件）、厂商、描述、封装名、数据手册链接，以及原理图符号、封装、3D 模型三栏预览（与 Components 页同一个组件 `CadPreview`），三者都可下载。3D 模型新增下载链接（Components 页也受益）。
+
+- 新放置的器件会记下零件库 ID；旧的板子按完整型号到零件库查找。
+- 只从 KiCad 库挑的封装（没有对应零件）：说明没有符号和 3D，仍可下载该封装文件（.kicad_mod）。

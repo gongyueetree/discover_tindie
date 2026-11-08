@@ -2391,3 +2391,40 @@ html {scrollbar-gutter:stable;}
     min-height: 0;
   }
 }
+
+/* PCB planner inspector: the clicked part (PlannerPartInfo) — facts, then symbol / footprint / 3D stacked */
+.planner-part-info {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.planner-part-info dl {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+.planner-part-info dl > div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 0;
+}
+.planner-part-info dt {
+  color: var(--muted);
+}
+.planner-part-info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.planner-part-info dd a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.maker .planner-inspector .ecad-grid {
+  grid-template-columns: 1fr;
+}
+.planner-part-info .btn {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}

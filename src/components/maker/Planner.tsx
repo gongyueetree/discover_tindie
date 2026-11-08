@@ -1,6 +1,7 @@
 "use client";
 import { effectiveMountingHoles } from "@/vendor/protopcb/design-core/board/mounting-holes";
 import PlannerLibrary, { type LibraryChoice } from "./PlannerLibrary";
+import PlannerPartInfo from "./PlannerPartInfo";
 import PlannerPreview from "./PlannerPreview";
 import BoardSizeInput from "./BoardSizeInput";
 import PartDetailsModal from "./PartDetailsModal";
@@ -207,8 +208,10 @@ export default function Planner() {
       c.display = {
         description: item.part?.description || "",
         footprintFileUrl: item.url,
-        attributes: { kicadSource: item.text },
+        // The parts-database id, so the inspector can show this part's symbol, footprint and 3D.
+        attributes: { kicadSource: item.text, ...(item.part?.id?.startsWith("p_") ? { partId: item.part.id } : {}) },
         classification: item.part?.description || "",
+        ...(item.part?.datasheet ? { datasheetUrl: item.part.datasheet } : {}),
       };
       c.trust = {
         level: "CANDIDATE",
@@ -727,24 +730,6 @@ export default function Planner() {
           <h3>{selected ? "Component " + selected.reference : "Board BOM"}</h3>
           {selected && (
             <p className="muted">
-              {selected.mpn ? (
-                <button
-                  className="mpn-detail-link"
-                  onClick={() =>
-                    setDetailPart({
-                      mpn: selected.mpn.trim(),
-                      manufacturer: selected.manufacturer,
-                    })
-                  }
-                >
-                  {selected.mpn} ↗
-                </button>
-              ) : (
-                selected.footprint.name
-              )}
-              <span className="planner-part-manufacturer">
-                {selected.manufacturer}
-              </span>
               <span className="planner-category">
                 {categoryLabels[selected.category]}
               </span>
@@ -826,6 +811,17 @@ export default function Planner() {
               </div>
               <hr style={{ margin: "20px 0" }} />
             </>
+          )}
+                  {selected && (
+            <PlannerPartInfo
+              key={selected.instanceId}
+              component={selected}
+              onDetails={
+                selected.mpn
+                  ? () => setDetailPart({ mpn: selected.mpn.trim(), manufacturer: selected.manufacturer })
+                  : undefined
+              }
+            />
           )}
         </aside>
       </div>
