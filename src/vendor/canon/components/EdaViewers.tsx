@@ -433,7 +433,8 @@ function silkArtwork(pcb: PcbIr, project: (point: NumericPoint) => NumericPoint,
 
 export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: CanonicalIrBundle; library?: boolean; assets?:InputAsset[] }) {
   const viewWidth = library ? VIEW_HEIGHT : VIEW_WIDTH;
-  const [documentIndex, setDocumentIndex] = useState(0);
+  // Several boards: open on the one with the most on it (an outline-only board is still listed).
+  const [documentIndex, setDocumentIndex] = useState(() => bundle.pcbs.reduce((best, p, i, all) => (p.pads.length + p.tracks.length > all[best].pads.length + all[best].tracks.length ? i : best), 0));
   const [zoom, setZoom] = useState(1);
   const [pan,setPan]=useState({x:0,y:0});
   const svgRef=useRef<SVGSVGElement>(null),drag=useRef<{id:number;x:number;y:number}|null>(null);

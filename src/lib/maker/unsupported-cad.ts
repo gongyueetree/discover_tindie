@@ -32,7 +32,7 @@ export function unsupportedCadReason(assets: Asset[], diagnostics: Diagnostic[] 
     return `${list(binaryEagle)} ${binaryEagle.length > 1 ? "are" : "is"} binary EAGLE (version 5 or older), which cannot be read in the browser. Open ${binaryEagle.length > 1 ? "them" : "it"} in EAGLE 6 or later (or Fusion Electronics) and save again: the design is then stored as XML, which the viewer opens.`;
   const asciiPcb = paths("ALTIUM_ASCII_PCB_UNSUPPORTED");
   if (asciiPcb.length)
-    return `${list(asciiPcb)}: an Altium PCB saved as ASCII (as EasyEDA's Altium export writes it), which the viewer does not read. Save it in Altium as a binary PcbDoc, or open the project's own EasyEDA / KiCad files if the repository has them.`;
+    return `${list(asciiPcb)}: an Altium PCB saved as ASCII that could not be read (damaged or an unusual export). Save it in Altium as a binary PcbDoc, or open the project's own EasyEDA / KiCad files if the repository has them.`;
   const fusionEmpty = paths("FUSION_DOCUMENT_EMPTY");
   if (fusionEmpty.length)
     return `${list(fusionEmpty)}: this Fusion Electronics document does not contain its design. Export the schematic and board from Fusion as EAGLE .sch / .brd files.`;

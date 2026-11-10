@@ -322,3 +322,139 @@ function pcb(stream: (name: string) => Uint8Array, asset: SourceAsset, out: Kica
   out.normalized += normalized; out.recognized += normalized;
   out.diagnostics.push(diagnostic("ALTIUM_PCB_PARTIAL", `AD PCB 已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条直线走线、${result.vias.length} 个过孔和 ${result.zones.length} 块覆铜。圆弧板框采用采样近似；圆弧走线、特殊焊盘、叠层、盲埋孔范围和规则尚未完整解析。内嵌 STEP 模型按 Body 记录关联，加载结果请查看 3D 页面。`, "warning", "unsupported", ref, "preserved"));
 }
+
+/* ----------------------------------------------------------------------------
+ * A PcbDoc saved as "PCB ASCII" (local change: ../../NOTICE.md): not a compound
+ * file but one `|RECORD=Kind|KEY=VALUE|…` record per line, the same fields the
+ * binary streams hold as text (coordinates as `1234.5mil` / `1.2mm`, layers by
+ * name). Read into the same PCB IR as a binary board: outline, footprints,
+ * nets, pads, tracks, arcs, vias, copper regions and the silkscreen lines.
+ * -------------------------------------------------------------------------- */
+
+/** Layer names as an ASCII board writes them → Altium's layer numbers (as in the binary streams). */
+function asciiLayerNumber(name = ""): number {
+  const u = name.toUpperCase();
+  const fixed: Record<string, number> = {
+    TOP: 1, BOTTOM: 32, TOPOVERLAY: 33, BOTTOMOVERLAY: 34, TOPPASTE: 35, BOTTOMPASTE: 36, TOPSOLDER: 37, BOTTOMSOLDER: 38,
+    DRILLGUIDE: 55, KEEPOUT: 56, DRILLDRAWING: 73, MULTILAYER: 74,
+  };
+  if (fixed[u]) return fixed[u];
+  let m = /^MID(?:LAYER)?(\d+)$/.exec(u);
+  if (m) return 1 + Number(m[1]);
+  m = /^(?:INTERNAL)?PLANE(\d+)$/.exec(u);
+  if (m) return 38 + Number(m[1]);
+  m = /^MECHANICAL(\d+)$/.exec(u);
+  if (m) return 56 + Number(m[1]);
+  return 0;
+}
+
+export function isAltiumAsciiPcb(bytes: Uint8Array): boolean {
+  const head = decoder.decode(bytes.subarray(0, 256)).replace(/^﻿/, "").trimStart();
+  return /^\|RECORD=Board\|/i.test(head);
+}
+
+export function parseAltiumAsciiPcb(bytes: Uint8Array, asset: SourceAsset, out: KicadParseOutput) {
+  if (bytes.length > 64 * 1024 * 1024) throw new Error("AD PCB exceeds 64 MiB limit");
+  const records: Props[] = [];
+  for (let start = 0, at = 0; at <= bytes.length; at += 1) {
+    if (at < bytes.length && bytes[at] !== 0x0a && bytes[at] !== 0x0d) continue;
+    if (at > start) records.push(altiumProperties(bytes.subarray(start, at)));
+    start = at + 1;
+    if (records.length > 400000) throw new Error("Invalid or excessive AD records");
+  }
+  const of = (kind: string) => records.filter((r) => (r.RECORD || "").toLowerCase() === kind);
+  const boards = of("board");
+  if (!boards.length) throw new Error("Missing Board records");
+  // The board's settings are spread over several Board lines; the first holds the outline.
+  const board: Props = Object.assign(Object.create(null), ...boards.slice(1), boards[0]);
+
+  const ref = sourceRef(asset.id, asset.relativePath), id = stableId("pcb", asset.id);
+  const mil = (s = "0") => Number.parseFloat(s) * (s.toLowerCase().endsWith("mm") ? 1 : .0254);
+  const at = (p: Props, x = "X", y = "Y") => pt(mil(p[x]), -mil(p[y]));
+  const result: PcbIr = { id, documentId: stableId("document", asset.sha256, asset.relativePath), name: withoutExtension(asset.fileName), units: "mm", coordinateSystem: { sourceUnits: "mil", canonicalUnits: "mm", rotationConvention: "degrees_ccw", precision: "source_token_preserved" }, layers: [], stackup: [], boardOutline: [], footprints: [], pads: [], tracks: [], vias: [], zones: [], silkscreen: { graphics: [], polygons: [], texts: [] }, sourceRefs: [ref] };
+  const copper = copperNames(board);
+  const layer = (name = "") => { const n = asciiLayerNumber(name); return n === 74 ? "*.Cu" : copper.get(n) ?? (n ? `AD.Layer${n}` : `AD.${name || "Unknown"}`); };
+  const silk = (name = "") => ({ 33: "F.SilkS", 34: "B.SilkS" } as Record<number, string>)[asciiLayerNumber(name)];
+  for (let n = 1; n <= 32; n++) { const name = n === 1 ? "F.Cu" : n === 32 ? "B.Cu" : copper.get(n) ?? `AD.Layer${n}`; result.layers.push({ id: name, sourceId: String(n), name, role: "copper", side: n === 1 ? "front" : n === 32 ? "back" : "inner", copper: true }); }
+
+  // Outline: the board's vertices, an arc segment sampled (as the binary reader).
+  const outline: IrPoint[] = [];
+  for (let n = 0; board[`VX${n}`] !== undefined && n < 10000; n++) {
+    outline.push(pt(mil(board[`VX${n}`]), -mil(board[`VY${n}`])));
+    if (board[`KIND${n}`] === "1") {
+      const a = num(board, `SA${n}`), sweep = ((num(board, `EA${n}`) - a) % 360 + 360) % 360;
+      for (let k = 1; k < 24; k++) { const t = (a + sweep * k / 24) * Math.PI / 180; outline.push(pt(mil(board[`CX${n}`]) + mil(board[`R${n}`]) * Math.cos(t), -mil(board[`CY${n}`]) - mil(board[`R${n}`]) * Math.sin(t))); }
+    }
+  }
+  // The last vertex repeats the first: one closing edge is enough.
+  if (outline.length > 1 && outline[0].x === outline[outline.length - 1].x && outline[0].y === outline[outline.length - 1].y) outline.pop();
+  outline.forEach((p, i) => result.boardOutline.push({ id: `${id}:edge${i}`, kind: "line", geometry: { start: p, end: outline[(i + 1) % outline.length] } }));
+
+  // Footprints, by their ID (pads and texts name it in COMPONENT=).
+  const footprints = new Map<string, PcbIr["footprints"][number]>();
+  const designators = new Map<string, string>();
+  for (const t of of("text")) if (t.COMPONENT !== undefined && t.DESIGNATOR === "TRUE" && t.TEXT) designators.set(t.COMPONENT, t.TEXT);
+  of("component").forEach((p, i) => {
+    const key = p.ID ?? String(i);
+    const fp: PcbIr["footprints"][number] = { id: `${id}:fp${i}`, reference: p.SOURCEDESIGNATOR || designators.get(key) || "?", value: p.SOURCELIBREFERENCE || p.COMMENT || "", libraryIdentifier: p.PATTERN || "", position: at(p), rotation: String(num(p, "ROTATION")), side: (p.LAYER || "").toUpperCase() === "BOTTOM" ? "back" : "front", locked: p.LOCKED === "TRUE", padIds: [], sourceRef: { ...ref, nativeId: `Component:${key}` } };
+    footprints.set(key, fp);
+    result.footprints.push(fp);
+  });
+  const nets = new Map<string, import("./types").NetIr>();
+  of("net").forEach((p, i) => {
+    const key = p.ID ?? String(i), name = p.NAME || `Net${key}`;
+    nets.set(key, { id: `${id}:net${key}`, domain: "pcb_physical", canonicalName: name, displayNames: [name], endpoints: [], segmentIds: [], resolution: { method: "explicit", confidence: 1 }, sourceRefs: [ref] });
+  });
+  const netOf = (p: Props) => (p.NET === undefined ? undefined : nets.get(p.NET));
+
+  of("pad").forEach((p, i) => {
+    const fp = p.COMPONENT === undefined ? undefined : footprints.get(p.COMPONENT), net = netOf(p), pid = `${id}:pad${i}`;
+    const hole = mil(p.HOLESIZE), shape = (p.SHAPE || "").toUpperCase();
+    const size = { x: String(mil(p.XSIZE ?? p.TOPXSIZE)), y: String(mil(p.YSIZE ?? p.TOPYSIZE)), unit: "mm" as const };
+    const position = at(p);
+    result.pads.push({ id: pid, footprintId: fp?.id, number: p.NAME || "", padType: hole > 0 ? (p.PLATED === "FALSE" ? "np_thru_hole" : "thru_hole") : "smd", shape: shape === "ROUND" ? (size.x === size.y ? "circle" : "oval") : shape === "RECTANGLE" ? "rect" : shape === "OCTAGONAL" ? "octagon" : "roundrect", rotation: String(num(p, "ROTATION")), position, size, drill: hole > 0 ? { x: String(hole), y: String(hole) } : undefined, layers: [layer(p.LAYER)], netId: net?.id, netName: net?.canonicalName, sourceNativeNetId: p.NET, sourceRef: ref });
+    fp?.padIds.push(pid);
+    net?.endpoints.push({ id: `${pid}:ep`, type: "footprint_pad", targetId: pid, identifier: { reference: fp?.reference || "", pad: p.NAME || "" }, position });
+  });
+  of("track").forEach((p, i) => {
+    const start = at(p, "X1", "Y1"), end = at(p, "X2", "Y2"), width = String(mil(p.WIDTH)), s = silk(p.LAYER);
+    if (s) { result.silkscreen!.graphics.push({ id: `${id}:silk-track${i}`, layer: s, kind: "line", geometry: { start, end }, width }); return; }
+    const net = netOf(p), tid = `${id}:track${i}`;
+    result.tracks.push({ id: tid, kind: "segment", start, end, width, layer: layer(p.LAYER), netId: net?.id, sourceNativeNetId: p.NET, sourceRef: ref });
+    net?.segmentIds.push(tid);
+  });
+  of("arc").forEach((p, i) => {
+    const cx = mil(p["LOCATION.X"]), cy = mil(p["LOCATION.Y"]), r = mil(p.RADIUS), a = num(p, "STARTANGLE"), sweep = ((num(p, "ENDANGLE") - a) % 360 + 360) % 360;
+    const on = (deg: number) => pt(cx + r * Math.cos(deg * Math.PI / 180), -(cy + r * Math.sin(deg * Math.PI / 180)));
+    const width = String(mil(p.WIDTH)), s = silk(p.LAYER);
+    if (s) { result.silkscreen!.graphics.push(sweep === 0 ? { id: `${id}:silk-arc${i}`, layer: s, kind: "circle", geometry: { center: pt(cx, -cy), end: on(0) }, width } : { id: `${id}:silk-arc${i}`, layer: s, kind: "arc", geometry: { start: on(a), mid: on(a + sweep / 2), end: on(a + sweep) }, width }); return; }
+    const net = netOf(p), tid = `${id}:arc${i}`;
+    // A full circle: two halves (an arc needs distinct ends).
+    const parts = sweep === 0 ? [[a, 180], [a + 180, 180]] : [[a, sweep]];
+    parts.forEach(([from, span], k) => result.tracks.push({ id: k ? `${tid}b` : tid, kind: "arc", start: on(from), mid: on(from + span / 2), end: on(from + span), width, layer: layer(p.LAYER), netId: net?.id, sourceNativeNetId: p.NET, sourceRef: ref }));
+    net?.segmentIds.push(tid);
+  });
+  of("via").forEach((p, i) => {
+    const net = netOf(p), vid = `${id}:via${i}`, position = at(p);
+    result.vias.push({ id: vid, position, size: String(mil(p.DIAMETER)), drill: String(mil(p.HOLESIZE?.match(/[a-z]$/i) ? p.HOLESIZE : `${p.HOLESIZE ?? 0}mil`)), layers: [layer(p.STARTLAYER || "TOP"), layer(p.ENDLAYER || "BOTTOM")], netId: net?.id, sourceRef: ref });
+    net?.endpoints.push({ id: `${vid}:ep`, type: "via", targetId: vid, identifier: {}, position });
+  });
+  // Copper regions outside footprints (pours, copper shapes): drawn as filled zones. A footprint's own region is its pad shape.
+  of("region").forEach((p, i) => {
+    const l = copper.get(asciiLayerNumber(p.LAYER));
+    if (!l || p.KEEPOUT === "TRUE" || (p.KIND ?? "0") !== "0") return;
+    const pts: [number, number][] = [];
+    for (let n = 0; p[`VX${n}`] !== undefined && n < 10000; n++) pts.push([mil(p[`VX${n}`]), -mil(p[`VY${n}`])]);
+    if (pts.length < 3 || (p.COMPONENT !== undefined && p.COMPONENT !== "65535" && footprints.has(p.COMPONENT))) return;
+    const net = netOf(p);
+    result.zones.push({ id: `${id}:region${i}`, netId: net?.id, sourceNativeNetId: p.NET, layers: [l], sourceRef: { ...ref, nativeId: `Region:${i}` }, shape: { keepout: false, outline: pts, fills: [{ layer: l, points: pts }] } });
+  });
+
+  const usedLayers = new Set([...result.pads.flatMap((p) => p.layers), ...result.tracks.map((t) => t.layer)]);
+  result.layers = result.layers.filter((l) => usedLayers.has(l.name));
+  out.pcbs.push(result);
+  out.nets.push(...nets.values());
+  const normalized = result.pads.length + result.tracks.length + result.footprints.length;
+  out.normalized += normalized; out.recognized += normalized;
+  out.diagnostics.push(diagnostic("ALTIUM_ASCII_PCB", `AD PCB（ASCII 格式）已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条走线（含圆弧）、${result.vias.length} 个过孔和 ${result.zones.length} 块铜皮。ASCII 文件不含内嵌 3D 模型；元件丝印文字与自定义焊盘形状尚未绘制。`, "warning", "unsupported", ref, "preserved"));
+}

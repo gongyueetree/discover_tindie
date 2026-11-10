@@ -1,6 +1,6 @@
 // @ts-nocheck — vendored from canon-eda-ir-agent (REFIR); see ../NOTICE.md. Typed access goes through ../core-api.ts.
 import { joinSheetNets, type KicadParseOutput } from "./kicad";
-import { isAltiumAsciiSchematic, parseAltiumAsciiSchematic, parseAltiumNative } from "./altium-native";
+import { isAltiumAsciiPcb, isAltiumAsciiSchematic, parseAltiumAsciiPcb, parseAltiumAsciiSchematic, parseAltiumNative } from "./altium-native";
 import type { InputAsset, SourceAsset } from "./types";
 import { decodeUtf8, diagnostic, sourceRef, stableId, withoutExtension } from "./util";
 
@@ -191,11 +191,20 @@ export function parseAltium(inputs: InputAsset[], inventory: SourceAsset[]): Kic
         output.diagnostics.push(diagnostic("ALTIUM_NATIVE_UNSUPPORTED", `${asset.relativePath}: ${error instanceof Error ? error.message : "解析失败"}；保留原文件，未输出该文档的部分错误实体。`, "warning", "unsupported", ref, "preserved"));
       }
     }
-    if (asset.extension === ".pcbdoc" && !isCfb(input.bytes) && /^\uFEFF?\s*\|(?:RECORD|KIND)=/i.test(decodeUtf8(input.bytes.subarray(0, 64)))) {
-      output.opaqueNodes.push({ recordType: "Altium.AsciiPcbDoc", sourcePath: asset.relativePath, payloadHash: asset.sha256 });
-      output.recognized += 1; output.opaque += 1;
-      output.diagnostics.push(diagnostic("ALTIUM_ASCII_PCB_UNSUPPORTED", `${asset.relativePath} 以 PCB ASCII 格式保存；本读取器读取二进制 PcbDoc。请在 Altium 中另存为二进制 PcbDoc 后重新上传。原文件已保留。`, "warning", "unsupported", ref, "preserved"));
-      continue;
+    if (asset.extension === ".pcbdoc" && !isCfb(input.bytes) && isAltiumAsciiPcb(input.bytes)) {
+      const native: KicadParseOutput = { settings: {}, schematics: [], pcbs: [], parts: [], nets: [], constraints: [], libraries: [], sourceMap: [], diagnostics: [], opaqueNodes: [], recognized: 0, normalized: 0, opaque: 0 };
+      try {
+        parseAltiumAsciiPcb(input.bytes, asset, native);
+        output.pcbs.push(...native.pcbs); output.nets.push(...native.nets);
+        output.diagnostics.push(...native.diagnostics);
+        output.normalized += native.normalized; output.recognized += native.recognized;
+        continue;
+      } catch (error) {
+        output.opaqueNodes.push({ recordType: "Altium.AsciiPcbDoc", sourcePath: asset.relativePath, payloadHash: asset.sha256 });
+        output.recognized += 1; output.opaque += 1;
+        output.diagnostics.push(diagnostic("ALTIUM_ASCII_PCB_UNSUPPORTED", `${asset.relativePath} 以 PCB ASCII 格式保存，读取失败：${error instanceof Error ? error.message : String(error)}。原文件已保留。`, "warning", "unsupported", ref, "preserved"));
+        continue;
+      }
     }
     if (isCfb(input.bytes)) {
       if ([".schdoc", ".pcbdoc"].includes(asset.extension)) {
