@@ -113,7 +113,14 @@ export async function keywordSearch(keyword: string, limit = 3): Promise<DkProdu
     body: JSON.stringify({ Keywords: keyword, Limit: limit, Offset: 0 }),
     cache: "no-store", signal: fetchSignal(15000),
   });
-  if (resp.status === 429) throw new Error("RATE_LIMITED");
+  if (resp.status === 429) {
+    // DigiKey says which limit was hit: the per-minute burst limit (wait Retry-After seconds) or the
+    // app's daily quota (X-RateLimit-Remaining: 0 — no call succeeds until it resets).
+    throw Object.assign(new Error("RATE_LIMITED"), {
+      retryAfter: Number(resp.headers.get("Retry-After")) || undefined,
+      daily: resp.headers.get("X-RateLimit-Remaining") === "0",
+    });
+  }
   if (!resp.ok) throw new Error(`keywordSearch ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json();
   const products: DkProduct[] = [

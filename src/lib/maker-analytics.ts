@@ -36,6 +36,7 @@ export const SCOPES = {
   "open:part": "Parts opened",
   "open:design": "Designs opened",
   "error:partdata": "Parts database errors",
+  "error:supplier": "DigiKey / Mouser errors",
 } as const;
 export type Scope = keyof typeof SCOPES;
 

@@ -8,6 +8,7 @@
  */
 import Linkify from "./Linkify";
 import { checkUsable } from "@/lib/maker/usable-client";
+import { getJson } from "@/lib/maker/get-json";
 import GraphEmbed from "./GraphEmbed";
 import { useEffect, useMemo, useRef, useState } from "react";
 import SupportedFormats, { CAD_ACCEPT } from "./SupportedFormats";
@@ -54,6 +55,8 @@ export default function Circuits() {
   const hiddenHere = (list?.items || []).filter((d) => hidden.has(d.id)).length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The last list request, so the error notice can offer to try it again.
+  const [lastLoad, setLastLoad] = useState<{ next: { module?: string; mpn?: string }; offset: number } | null>(null);
 
   useEffect(() => {
     const p = new URLSearchParams(queryString);
@@ -61,13 +64,9 @@ export default function Circuits() {
   }, [queryString]);
 
   useEffect(() => {
-    fetch("/api/maker/modules")
-      .then(async (r) => {
-        const d = await r.json();
-        if (!r.ok) throw Error(d.error);
-        setTree(d.items || []);
-      })
-      .catch((e) => setError(e.message));
+    getJson("/api/maker/modules")
+      .then((d) => setTree(d.items || []))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   const byId = useMemo(() => {
@@ -83,14 +82,13 @@ export default function Circuits() {
   async function load(next: { module?: string; mpn?: string }, offset = 0) {
     setBusy(true);
     setError("");
+    setLastLoad({ next, offset });
     try {
       const p = new URLSearchParams({ offset: String(offset) });
       if (next.mpn) p.set("mpn", next.mpn);
       else if (next.module) p.set("module", next.module);
       else return;
-      const r = await fetch("/api/maker/circuits?" + p);
-      const d = await r.json();
-      if (!r.ok) throw Error(d.error);
+      const d = await getJson("/api/maker/circuits?" + p);
       setList((old) => (offset && old ? { ...d, items: [...old.items, ...d.items] } : d));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -231,6 +229,14 @@ export default function Circuits() {
       {error && (
         <div className="notice error" role="alert">
           {error}
+          {lastLoad && !busy && (
+            <>
+              {" "}
+              <button className="text-link" onClick={() => load(lastLoad.next, lastLoad.offset)}>
+                Try again
+              </button>
+            </>
+          )}
         </div>
       )}
 

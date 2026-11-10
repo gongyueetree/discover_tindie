@@ -175,19 +175,23 @@ export function reserveTranslation(visitorKey: string | null, chars: number) {
   return reserveBudgets("translate", chars, visitorBudgets(visitorKey, site, mine, mine * 5));
 }
 
-/** After a distributor answers 429: stop calling it for a while (Retry-After when given). */
-const cooldowns = new Map<Provider, number>();
-export function supplierCooldown(provider: Provider, seconds = 300) {
-  cooldowns.set(provider, Date.now() + Math.min(3600, Math.max(30, seconds)) * 1000);
-  if (redis) void redis.set(`mk:cooldown:${provider}`, "1", { ex: Math.min(3600, Math.max(30, seconds)) }).catch(() => undefined);
+/** After a distributor answers 429: stop calling it for a while (Retry-After when given), with the reason shown to visitors. */
+const cooldowns = new Map<Provider, { until: number; reason: string }>();
+export function supplierCooldown(provider: Provider, seconds = 300, reason = "") {
+  const s = Math.min(3600, Math.max(30, seconds));
+  cooldowns.set(provider, { until: Date.now() + s * 1000, reason });
+  if (redis) void redis.set(`mk:cooldown:${provider}`, reason || "1", { ex: s }).catch(() => undefined);
 }
-export async function supplierCoolingDown(provider: Provider) {
-  if ((cooldowns.get(provider) || 0) > Date.now()) return true;
+/** false, or the reason this distributor is not being called right now ("" = no reason recorded). */
+export async function supplierCoolingDown(provider: Provider): Promise<string | false> {
+  const local = cooldowns.get(provider);
+  if (local && local.until > Date.now()) return local.reason;
   if (!redis) return false;
   try {
-    return (await redis.get(`mk:cooldown:${provider}`)) !== null;
+    const v = await redis.get<string>(`mk:cooldown:${provider}`);
+    return v === null || v === undefined ? false : v === "1" ? "" : String(v);
   } catch {
-    return true;
+    return "";
   }
 }
 

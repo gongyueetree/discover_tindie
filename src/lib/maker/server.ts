@@ -7,6 +7,7 @@ import { keywordSearch } from "@/vendor/bom2buy/digikey";
 import { PartdataError } from "@/lib/partdata/client";
 import { searchPartdata, status as partdataStatus } from "@/lib/partdata/maker";
 import type { Part, ProviderStatus } from "./types";
+import { noteAsync, recordTerm } from "@/lib/maker-analytics";
 import { limitVisitor, reserveSupplierCall, supplierCached, supplierCacheKey, supplierCooldown, supplierCoolingDown, SupplierUnavailable, type Bucket, type Provider } from "./limits";
 export class SourceError extends Error {
   constructor(
@@ -121,7 +122,8 @@ async function supplierLookup(
   const key = supplierCacheKey(provider, q);
   try {
     const { value } = await supplierCached(key, async () => {
-      if (await supplierCoolingDown(provider)) throw new SupplierSkip(COOLDOWN_MSG[provider]);
+      const cooling = await supplierCoolingDown(provider);
+      if (cooling !== false) throw new SupplierSkip(cooling || COOLDOWN_MSG[provider]);
       // Checked again after waiting for the cache / lock: never start a paid call that cannot finish.
       if (left() < 7_000) throw new SupplierSkip(SKIP);
       if (!(await reserveSupplierCall(provider, visitor))) throw new SupplierSkip("Live distributor lookups are paused for today (usage limit reached)");
@@ -134,7 +136,15 @@ async function supplierLookup(
     statuses.push({ source, status: "ready" });
   } catch (e) {
     const m = e instanceof Error ? e.message : "";
-    if (m === "RATE_LIMITED") supplierCooldown(provider, (e as any).retryAfter || 600);
+    const name = provider === "digikey" ? "DigiKey" : "Mouser";
+    const daily = m === "RATE_LIMITED" && !!(e as { daily?: boolean }).daily;
+    const reason = daily ? `${name}'s daily API quota is used up; live prices return when it resets` : COOLDOWN_MSG[provider];
+    if (m === "RATE_LIMITED") {
+      // A spent daily quota: try again in an hour; the per-minute limit: as long as asked (default 2 min).
+      supplierCooldown(provider, daily ? 3600 : (e as { retryAfter?: number }).retryAfter || 120, reason);
+      noteAsync(() => recordTerm("error:supplier", `${provider} · ${daily ? "daily quota used up" : "per-minute limit"}`));
+    } else if (!(e instanceof SupplierSkip || e instanceof SupplierUnavailable))
+      noteAsync(() => recordTerm("error:supplier", `${provider} · ${/OAuth/.test(m) ? "credentials rejected" : "request failed"}`));
     statuses.push({
       source,
       status: "error",
@@ -142,7 +152,7 @@ async function supplierLookup(
         e instanceof SupplierSkip || e instanceof SupplierUnavailable
           ? m
           : m === "RATE_LIMITED"
-            ? `${provider === "digikey" ? "DigiKey" : "Mouser"} daily API quota used up`
+            ? reason
             : /OAuth/.test(m)
               ? `${provider === "digikey" ? "DigiKey" : "Mouser"} credentials rejected`
               : `${provider === "digikey" ? "DigiKey" : "Mouser"} request failed`,

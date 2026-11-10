@@ -460,3 +460,16 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 
 - 新放置的器件会记下零件库 ID；旧的板子按完整型号到零件库查找。
 - 只从 KiCad 库挑的封装（没有对应零件）：说明没有符号和 3D，仍可下载该封装文件（.kicad_mod）。
+
+## 32. 精简推荐卡片；零件库与 DigiKey 加载不出来（2026-11-10）
+
+**Open hardware「Fresh open hardware」卡片缩短约一半**：Claude 生成时要求简介 1–2 句（≤220 字符）、亮点最多 2 条（每条 <70 字符）、注意事项 1 句（≤120 字符），入库时按词截断（带 "…"）。已经发布的旧卡片在显示时限制为简介 3 行、亮点 2 条、每条及注意事项最多 2 行；完整内容在悬停提示和 "Read more" 文章里。
+
+**元器件搜索常常只有 Mouser 的数据**：
+- 零件库：搜索时零件库最多等 8 秒（原 20 秒），超时就继续查分销商，不再整页一起等。
+- DigiKey：429 会说明是每分钟限额还是每日额度（`X-RateLimit-Remaining: 0`）。每日额度用完时暂停 1 小时并直接告诉访客"DigiKey 今日 API 额度已用完"；每分钟限额按 DigiKey 给的 Retry-After（默认 2 分钟）。每次都记到后台 Discover traffic →「DigiKey / Mouser errors」。
+- 很可能的原因：零件库（ezplm_partdata）的「分销商补全」每天自动调用 DigiKey 最多 700 次（`dist_daily_quota`），如果它和网站用的是同一个 DigiKey 应用（Client ID），两边共享同一份每日额度；而且这个任务就在零件库的网页进程里运行，跑的时候零件库的响应也会变慢。建议给网站单独建一个 DigiKey 应用，或调低 / 关掉零件库的自动补全。
+
+**Open hardware 设计列表常显示 "Load failed"**（Safari 的网络层错误：请求在零件库慢的时候被网络或中间节点断开，不是服务器返回的错误）：
+- 服务器：一个模块 / 型号 / 系列拼好的设计列表在共享缓存（Redis `mk:pool:v1:*`）里保存 15 分钟，重复打开不再请求零件库；零件库每页最多等 12 秒。
+- 浏览器（`src/lib/maker/get-json.ts`）：请求断开或网关 502/503/504 时自动重试一次；仍失败就显示一句说明和「Try again」按钮，而不是浏览器的 "Load failed"。检查：`scripts/get-json-checks.ts`。

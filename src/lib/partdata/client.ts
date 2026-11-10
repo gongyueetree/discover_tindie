@@ -123,7 +123,7 @@ const MESSAGES: Record<string, string> = {
   query_too_short: "Enter at least 3 characters of a part number.",
 };
 
-async function send(method: "GET" | "POST", path: string, query: Query, body: unknown, visitor?: string) {
+async function send(method: "GET" | "POST", path: string, query: Query, body: unknown, visitor?: string, maxMs = 20000) {
   if (!partdataConfigured())
     throw new PartdataError(
       "The parts database is not connected yet (PARTDATA_API_BASE / KEY / SECRET).",
@@ -142,7 +142,7 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
       method,
       cache: "no-store",
       redirect: "error",
-      signal: sharedFetchSignal(20000),
+      signal: sharedFetchSignal(maxMs),
       headers: {
         Accept: "application/json",
         "X-Api-Key": KEY(),
@@ -187,10 +187,11 @@ async function send(method: "GET" | "POST", path: string, query: Query, body: un
 }
 
 /** Signed GET, cached for 10 minutes per path + query. */
-export function pdGet(path: string, query: Query = {}, visitor?: string): Promise<{ data: any; meta: any }> {
+/** `maxMs`: how long to wait for partdata (a search gives up sooner so distributors still get their turn). */
+export function pdGet(path: string, query: Query = {}, visitor?: string, maxMs = 20000): Promise<{ data: any; meta: any }> {
   // A GET that fails with a server error (500/503) is tried once more after a short pause, when the
   // request still has time: a passing hiccup should not show the visitor an error banner.
-  const once = () => send("GET", path, query, undefined, visitor);
+  const once = () => send("GET", path, query, undefined, visitor, maxMs);
   const key = `GET ${path}?${canonicalQuery(query)}`;
   const fetchIt = () =>
     once().catch(async (e) => {
