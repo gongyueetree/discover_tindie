@@ -23,7 +23,11 @@ const base: V = {
 const t = tidy({ ...base, score: 140 });
 assert.equal(t.score, 100);
 assert.equal(t.title, "Wedge keyboard");
-assert.deepEqual(t.highlights, ["RP2040", "a", "b", "c"]);
+assert.deepEqual(t.highlights, ["RP2040", "a"], "at most two highlights on a card");
+// Over-long fields are cut at a word, with an ellipsis, to about half the old card length.
+const long = tidy({ ...base, intro: "word ".repeat(120), highlights: ["x ".repeat(80)], caveat: "y ".repeat(120) });
+assert.ok(long.intro.length <= 280 && long.intro.endsWith("…") && !/\s…$/.test(long.intro));
+assert.ok(long.highlights[0].length <= 90 && long.caveat!.length <= 160);
 assert.equal(t.caveat, null);
 assert.equal(t.tags.length, 3);
 assert.equal(tidy({ ...base, caveat: "Author says it is untested." }).caveat, "Author says it is untested.");

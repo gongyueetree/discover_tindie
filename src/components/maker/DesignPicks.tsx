@@ -72,17 +72,19 @@ export default function DesignPicks({ onOpen }: { onOpen: (repoUrl: string) => v
               <button className="pick-title" onClick={() => onOpen(p.repoUrl)}>
                 {p.title}
               </button>
-              <p className="pick-intro">{p.intro}</p>
+              <p className="pick-intro" title={p.intro}>{p.intro}</p>
               {p.highlights.length > 0 && (
                 <ul className="pick-points">
-                  {p.highlights.slice(0, 3).map((h) => (
-                    <li key={h}>{h}</li>
+                  {p.highlights.slice(0, 2).map((h) => (
+                    <li key={h} title={h}>
+                      <span className="pick-point-text">{h}</span>
+                    </li>
                   ))}
                 </ul>
               )}
               {p.caveat && (
-                <p className="pick-caveat">
-                  <AlertTriangle size={13} aria-hidden /> {p.caveat}
+                <p className="pick-caveat" title={p.caveat}>
+                  <AlertTriangle size={13} aria-hidden /> <span className="pick-caveat-text">{p.caveat}</span>
                 </p>
               )}
               <div className="pick-actions">

@@ -77,8 +77,9 @@ export async function searchPartdata(q: string, visitor: string) {
   const key = norm(q);
   if (key.length < 3) throw new PartdataError("Enter at least 3 characters of a part number.", 400, "query_too_short");
   const [lookup, search] = await Promise.allSettled([
-    pdGet(`${P}/parts/lookup`, { mpn: q }, visitor),
-    pdGet(`${P}/parts/search`, { q, limit: 20 }, visitor),
+    // 8 s each: a slow parts database must not hold up the distributor lookups that follow.
+    pdGet(`${P}/parts/lookup`, { mpn: q }, visitor, 8000),
+    pdGet(`${P}/parts/search`, { q, limit: 20 }, visitor, 8000),
   ]);
   if (lookup.status === "rejected" && search.status === "rejected") throw lookup.reason;
   const rows = [

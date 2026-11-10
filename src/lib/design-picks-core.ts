@@ -9,12 +9,12 @@ export const Verdict = z.object({
   recommend: z.boolean().describe("true only if this is a real, openable hardware design worth studying"),
   score: z.number().int().describe("0-100: how useful it is as a reference design for makers"),
   title: z.string().describe("Short name of the design, e.g. 'Wedge — 48-key RP2040 keyboard'"),
-  intro: z.string().describe("2-3 sentences: what the board is and why it is worth opening"),
-  highlights: z.array(z.string()).describe("Up to 4 short points: key parts, techniques, what to learn"),
+  intro: z.string().describe("1-2 short sentences, at most 220 characters: what the board is and why it is worth opening"),
+  highlights: z.array(z.string()).describe("At most 2 points, each under 70 characters: the key part or technique to learn from"),
   caveat: z
     .string()
     .nullable()
-    .describe("Maturity or licence limits the sources state (not built yet, no traces, separate model licence…); null if none"),
+    .describe("One short sentence, at most 120 characters, on maturity or licence limits the sources state (not built yet, untested, separate model licence…); null if none"),
   tags: z.array(z.string()).describe("1-3 short topic tags"),
   article_summary: z.string().describe("3-4 '- ' bullets describing the design, for a Resources article"),
   article_why: z.string().describe("3-4 '- ' bullets: why it matters to makers and Tindie sellers"),
@@ -52,7 +52,8 @@ Recommend a design only when it is a real electronics design (schematic and/or P
 could learn from or build on. Do not recommend empty templates, pure software, unrelated repositories, or projects
 whose files are clearly not the design described. Score usefulness as a reference design, not popularity.
 
-Write in plain, friendly English, in your own words. State only what the material provided supports; never invent
+The card is read at a glance, so keep it short: one or two sentences of intro, two brief highlights, and a caveat of one
+sentence when needed. Leave detail for the article fields. Write in plain, friendly English, in your own words. State only what the material provided supports; never invent
 part numbers, specifications, test results or licences. If the README or article says the board is untested, not yet
 fabricated, an early draft, or that some files carry a different licence, say so in "caveat".
 
@@ -83,14 +84,20 @@ export function userPrompt(c: Candidate, f: Facts) {
 
 /** Clean a verdict before it is stored: bounded lengths, score 0-100, no empty strings. */
 export function tidy(v: Verdict): Verdict {
-  const s = (x: string, n: number) => x.replace(/\s+\n/g, "\n").trim().slice(0, n);
+  // Cut at a word boundary (with "…") rather than mid-word when a field runs over its length.
+  const s = (x: string, n: number) => {
+    const t = x.replace(/\s+\n/g, "\n").trim();
+    if (t.length <= n) return t;
+    const cut = t.slice(0, n - 1);
+    return (cut.slice(0, Math.max(cut.lastIndexOf(" "), n * 0.6)) || cut).replace(/[\s,;:.–—-]+$/, "") + "…";
+  };
   return {
     ...v,
     score: Math.max(0, Math.min(100, Math.round(v.score))),
     title: s(v.title, 120),
-    intro: s(v.intro, 600),
-    highlights: v.highlights.map((h) => s(h, 160)).filter(Boolean).slice(0, 4),
-    caveat: v.caveat && v.caveat.trim() ? s(v.caveat, 300) : null,
+    intro: s(v.intro, 280),
+    highlights: v.highlights.map((h) => s(h, 90)).filter(Boolean).slice(0, 2),
+    caveat: v.caveat && v.caveat.trim() ? s(v.caveat, 160) : null,
     tags: v.tags.map((t) => s(t, 30)).filter(Boolean).slice(0, 3),
     article_summary: s(v.article_summary, 1000),
     article_why: s(v.article_why, 1000),

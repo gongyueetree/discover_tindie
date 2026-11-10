@@ -27,6 +27,7 @@ const SCOPES: [string, string][] = [
   ["open:design", "Designs opened"],
   ["open:part", "Parts opened"],
   ["error:partdata", "Parts database errors"],
+  ["error:supplier", "DigiKey / Mouser errors"],
 ];
 const INK = "#2f3438", INK2 = "#5a6b72", MUTED = "#8a9499", LINE = "#e3e9eb", GRID = "#eef2f3";
 const fmt = (n: number) => n.toLocaleString("en-US");

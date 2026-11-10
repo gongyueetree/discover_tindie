@@ -679,3 +679,6 @@ dialog.maker { font-size: 14px; }
 .maker .pick-gh:hover { color: var(--tq-600); }
 .maker .picks-more { margin-top: 10px; }
 .maker .picks-note { margin: 10px 0 0; font-size: 11.5px; color: var(--muted); }
+/* Fresh open hardware cards: read at a glance — intro ≤ 3 lines, each point and the caveat ≤ 2 (full text on hover and in "Read more"). */
+.maker .pick-intro { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.maker .pick-point-text, .maker .pick-caveat-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
