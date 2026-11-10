@@ -193,8 +193,20 @@ function vendorName(given: unknown, url: unknown): string | null {
 
 type DesignFilter = { part?: string; mpn?: string; family?: string; function?: string };
 
-/** Up to 100 designs for one filter (5 cached pages of 20), with Tindie's rules applied. */
+/** Up to 100 designs for one filter, with Tindie's rules applied. The assembled list is kept for
+    15 minutes in the shared cache, so repeat views of a module need no parts-database call. */
 async function designPool(filter: DesignFilter, visitor: string) {
+  const [kind, value] = Object.entries(filter).find(([, v]) => v) ?? [];
+  if (!kind) return loadDesignPool(filter, visitor);
+  const { sharedValue } = await import("@/lib/maker/limits");
+  const key = `mk:pool:v1:${kind}:${String(value).toLowerCase().slice(0, 120)}`;
+  return sharedValue(key, 900, () => loadDesignPool(filter, visitor), (list) => list.length > 0);
+}
+
+/** Each page gets at most 12 s from the parts database (the route has 50 s in all). */
+const DESIGN_PAGE_MS = 12_000;
+
+async function loadDesignPool(filter: DesignFilter, visitor: string) {
   const q: Record<string, string | number> = { limit: 20, min_stars: DESIGN_RULES.minStars, eda: DESIGN_RULES.eda.join(",") };
   if (filter.part) q.part = filter.part;
   else if (filter.mpn) q.mpn = filter.mpn;
@@ -203,14 +215,14 @@ async function designPool(filter: DesignFilter, visitor: string) {
   else throw new PartdataError("Choose a part, family or circuit module.", 400, "bad_request");
   // partdata pages 20 at a time (up to offset 80). The first page says how many there are; the
   // rest are fetched together rather than one after another.
-  const first = await pdGet(`${P}/designs`, { ...q, offset: 0 }, visitor);
+  const first = await pdGet(`${P}/designs`, { ...q, offset: 0 }, visitor, DESIGN_PAGE_MS);
   const firstItems: DesignCard[] = (first.data.items || []).map(toDesign);
   const upstreamTotal = Number(first.meta?.pagination?.total) || 0;
   const offsets: number[] = [];
   if (firstItems.length >= 20) for (let o = 20; o <= 80 && o < upstreamTotal; o += 20) offsets.push(o);
   const rest = await Promise.all(
     offsets.map((offset) =>
-      pdGet(`${P}/designs`, { ...q, offset }, visitor)
+      pdGet(`${P}/designs`, { ...q, offset }, visitor, DESIGN_PAGE_MS)
         .then((r) => (r.data.items || []).map(toDesign) as DesignCard[])
         // A later page that fails leaves a shorter list rather than no list.
         .catch(() => [] as DesignCard[]),
