@@ -113,8 +113,9 @@ const COOLDOWN_MSG: Record<Provider, string> = {
   mouser: "Mouser asked us to slow down; live prices resume shortly",
   ezplm: "ezPLM asked us to slow down; its results return shortly",
 };
-/** Catalogue answers change rarely and every call counts against ezPLM's daily limit: kept a day. */
-const CACHE_SECONDS: Partial<Record<Provider, number>> = { ezplm: 86_400 };
+/** Catalogue answers change rarely and every call counts against ezPLM's daily limit: kept up to a
+    day, but no longer than the signed datasheet links in them stay valid. */
+const CACHE_SECONDS: Partial<Record<Provider, (parts: Part[]) => number>> = { ezplm: (parts) => linksValidFor(parts, 86_400) };
 
 /**
  * One distributor lookup: shared cache first; otherwise a real call only if the distributor is not
@@ -184,6 +185,22 @@ async function supplierLookup(
   }
 }
 class SupplierSkip extends Error {}
+
+/** Seconds until the first signed link (`?e=<unix seconds>`) in these parts expires, less 5 minutes; at most `max`, at least 10 minutes. */
+export function linksValidFor(parts: Part[], max: number, now = Date.now()) {
+  let ttl = max;
+  for (const p of parts)
+    for (const u of [p.datasheet, p.productUrl, p.image]) {
+      if (!u) continue;
+      try {
+        const e = Number(new URL(u).searchParams.get("e"));
+        if (Number.isFinite(e) && e > 1e9) ttl = Math.min(ttl, e - now / 1000 - 300);
+      } catch {
+        /* not a URL */
+      }
+    }
+  return Math.max(600, Math.floor(ttl));
+}
 
 
 async function digikeyParts(q: string): Promise<Part[]> {

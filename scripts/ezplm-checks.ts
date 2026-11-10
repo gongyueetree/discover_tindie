@@ -77,6 +77,24 @@ process.env.EZPLM_API_BASE = "https://ezplm.test";
     globalThis.fetch = original;
   }
 
+  // Signed links (?e=<unix seconds>) bound how long a cached answer is kept.
+  const { linksValidFor } = await import("../src/lib/maker/server");
+  const now = 1_700_000_000_000;
+  const signed = { ...p, datasheet: "https://qn.ezplm.com/pdf/x.pdf?e=" + (now / 1000 + 3600) + "&token=t" };
+  assert.equal(linksValidFor([signed], 86_400, now), 3300, "expires in 1 h: kept 55 min");
+  assert.equal(linksValidFor([p], 86_400, now), 86_400, "no signed link: a day");
+  assert.equal(linksValidFor([], 86_400, now), 86_400, "empty answer: a day");
+  assert.equal(linksValidFor([{ ...p, datasheet: "https://x/y.pdf?e=" + (now / 1000 + 60) }], 86_400, now), 600, "at least 10 min");
+
+  // A Chinese description that cannot be translated: the English category and package instead.
+  const { englishParts } = await import("../src/lib/maker/translation");
+  const [zh] = await englishParts([{ ...p, description: "具有使能功能的 200mA、低压降稳压器", category: "Power management (PMIC)" }]);
+  assert.equal(zh.description, "Power management (PMIC) · SOT-23-6");
+  const [bare] = await englishParts([{ ...p, description: "安全的双核芯片，带有加密引擎", category: undefined, footprintName: null }]);
+  assert.equal(bare.description, "English description unavailable");
+  const [lbl] = await englishParts([{ ...p, parameters: { 电源输入电压范围: "Min 2.7 V; Max 5.5 V" } }]);
+  assert.deepEqual(lbl.parameters, { "Supply input voltage range": "Min 2.7 V; Max 5.5 V" });
+
   // Without a key nothing is called and the source reads "not configured".
   delete process.env.EZPLM_API_KEY;
   assert.equal(ez.ezplmConfigured(), false);

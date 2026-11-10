@@ -103,9 +103,7 @@ export async function englishParts(parts: Part[], visitorKey: string | null = nu
     );
     return {
       ...p,
-      description: hasChinese(description)
-        ? "English description unavailable"
-        : description,
+      description: hasChinese(description) ? fallbackDescription(p) : description,
       parameters: Object.fromEntries(
         Object.entries(parameters).map(([key, value], i) => [
           hasChinese(key)
@@ -126,6 +124,12 @@ export async function englishParts(parts: Part[], visitorKey: string | null = nu
       },
     };
   });
+}
+
+/** An untranslatable description: the part's English category and package, if it has them. */
+function fallbackDescription(p: Part) {
+  const bits = [p.category, p.package || p.footprintName].filter((x): x is string => !!x && !hasChinese(x));
+  return bits.length ? bits.join(" · ") : "English description unavailable";
 }
 
 /** Translate display prose only; keep API IDs, URLs and source file paths untouched. */
