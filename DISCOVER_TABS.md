@@ -482,3 +482,7 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 - 省额度：同一查询（不分大小写）缓存 24 小时（Redis，空结果也缓存）；全站每天最多 `EZPLM_DAILY_BUDGET` 次（默认 800），每个访客也有每日上限；ezPLM 返回 429 时暂停 1 小时，访客看到 "ezPLM's daily API quota is used up"。错误记在后台 Discover traffic →「DigiKey / Mouser / ezPLM errors」。
 - 零件库（ezplm_partdata）也用同一类 key 做补全；网站最好用单独的 key，否则两边共用每日额度。
 - 检查：`scripts/ezplm-checks.ts`（签名与 ezPLM demo 一致、字段映射、缓存、429 暂停）。
+- 实测（2026-11-10，resource.tindie.com）：TPS79301DBVR、RP2350B 都从 ezPLM 返回了结果（型号、厂商、封装、数据手册、参数）。随后修正：
+  - ezPLM 的数据手册链接是带有效期的签名链接（`?e=` 约 40 分钟后过期），所以 ezPLM 结果的缓存时间改为"到最早一条签名链接过期前 5 分钟"（最少 10 分钟，最多 24 小时；没有签名链接或空结果仍为 24 小时）。
+  - 网站没有配置 Azure 翻译（`AZURE_TRANSLATOR_KEY`）时，中文描述翻不出来，原来显示 "English description unavailable"；现在改为显示英文分类和封装（如 "Power management (PMIC) · SOT-23-6"）。原文仍在 originalText 里。
+  - 词表补了"电源输入电压范围 / 输入电压范围 / 输出电压范围 / 电源电压范围"。

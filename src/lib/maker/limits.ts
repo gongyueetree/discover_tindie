@@ -244,7 +244,13 @@ const LOCK_MS = 65_000;
  *  - if Redis cannot be reached, no new paid lookup is started (cached answers still work).
  * Only successful answers are cached; errors (429, auth, timeouts) are never stored as "no result".
  */
-export async function supplierCached<T>(key: string, load: () => Promise<T>, deadline = Date.now() + 20_000, ttl = TTL): Promise<{ value: T; cached: boolean }> {
+/** `ttl`: seconds, or a function of the answer (e.g. until signed links in it expire). */
+export async function supplierCached<T>(
+  key: string,
+  load: () => Promise<T>,
+  deadline = Date.now() + 20_000,
+  ttlFor: number | ((value: T) => number) = TTL,
+): Promise<{ value: T; cached: boolean }> {
   const hit = memo.get(key);
   if (hit && hit.until > Date.now()) return { value: hit.value as T, cached: true };
   const stored = await fromRedis<T>(key);
@@ -257,6 +263,7 @@ export async function supplierCached<T>(key: string, load: () => Promise<T>, dea
   if (running) return { value: await untilDeadline(running, deadline), cached: true };
   if (Math.min(deadline - Date.now(), remainingMs()) < 1_500) throw new SupplierUnavailable("Not enough time left for a live lookup");
   const keep = async (value: T) => {
+    const ttl = Math.max(60, Math.floor(typeof ttlFor === "function" ? ttlFor(value) : ttlFor));
     if (memo.size > 5000) memo.clear();
     memo.set(key, { until: Date.now() + ttl * 1000, value });
     const r = redis;
