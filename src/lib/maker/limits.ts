@@ -77,7 +77,7 @@ export async function limitRequest(visitorKey: string, bucket: Bucket = "api", f
 
 /* ------------------------------------------------------------------ 2. paid distributor budget */
 
-export type Provider = "digikey" | "mouser";
+export type Provider = "digikey" | "mouser" | "ezplm";
 const day = () => new Date().toISOString().slice(0, 10);
 /** A budget from the environment; "0" means switched off (not "use the default"). */
 export function envBudget(name: string, fallback: number) {
@@ -87,7 +87,8 @@ export function envBudget(name: string, fallback: number) {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
 /** Site-wide calls per day (leave headroom under the account's real quota) and per visitor per day. */
-const siteDaily = (p: Provider) => envBudget(p === "digikey" ? "DIGIKEY_DAILY_BUDGET" : "MOUSER_DAILY_BUDGET", 800);
+const siteDaily = (p: Provider) =>
+  p === "ezplm" ? envBudget("EZPLM_DAILY_BUDGET", 800) : envBudget(p === "digikey" ? "DIGIKEY_DAILY_BUDGET" : "MOUSER_DAILY_BUDGET", 800);
 const visitorDaily = () => envBudget("SUPPLIER_VISITOR_DAILY_BUDGET", 150);
 
 /**
@@ -243,7 +244,7 @@ const LOCK_MS = 65_000;
  *  - if Redis cannot be reached, no new paid lookup is started (cached answers still work).
  * Only successful answers are cached; errors (429, auth, timeouts) are never stored as "no result".
  */
-export async function supplierCached<T>(key: string, load: () => Promise<T>, deadline = Date.now() + 20_000): Promise<{ value: T; cached: boolean }> {
+export async function supplierCached<T>(key: string, load: () => Promise<T>, deadline = Date.now() + 20_000, ttl = TTL): Promise<{ value: T; cached: boolean }> {
   const hit = memo.get(key);
   if (hit && hit.until > Date.now()) return { value: hit.value as T, cached: true };
   const stored = await fromRedis<T>(key);
@@ -257,10 +258,10 @@ export async function supplierCached<T>(key: string, load: () => Promise<T>, dea
   if (Math.min(deadline - Date.now(), remainingMs()) < 1_500) throw new SupplierUnavailable("Not enough time left for a live lookup");
   const keep = async (value: T) => {
     if (memo.size > 5000) memo.clear();
-    memo.set(key, { until: Date.now() + TTL * 1000, value });
+    memo.set(key, { until: Date.now() + ttl * 1000, value });
     const r = redis;
     // Stored even if this request's time ran out meanwhile: a paid answer is never thrown away.
-    if (r) await outsideRequest(() => r.set(key, value as any, { ex: TTL })).catch(() => undefined);
+    if (r) await outsideRequest(() => r.set(key, value as any, { ex: ttl })).catch(() => undefined);
     return value;
   };
   const p = (async (): Promise<T> => {
