@@ -493,3 +493,5 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 - 现在 `parseAltiumAsciiPcb`（`src/vendor/canon/lib/eda/altium-native.ts`）读出：板框、封装、网络、焊盘（形状/尺寸/孔/层）、走线、圆弧、过孔、封装外的铜皮，以及丝印层的线和圆弧（3D 用）。层号与二进制读取器一致（TOP=1、MIDn、BOTTOM=32、MULTILAYER=*.Cu…）。ASCII 文件没有内嵌 3D 模型；丝印文字和自定义焊盘形状暂未绘制。
 - 一个工程里有多块板时，PCB 页默认打开内容最多的那块（例：Atrium 的 rev-b1_case_Case_PCB 只有一个 1.1×0.9 in 的板框，没有任何焊盘或走线，是空板；默认改为打开 rev-b1_pod_Pod_PCB：59 个封装、246 个焊盘、204 条走线）。
 - 检查：`scripts/altium-ascii-pcb-checks.ts`（合成板）；`format-coverage-checks.ts` 改为断言 ASCII PcbDoc 能读出板子。
+- 3D（2026-11-11 补充）：ASCII 板子没有内嵌 3D 模型，现在每个封装按焊盘布局匹配 KiCad 官方标准模型（与 EAGLE 板相同的 `package-models.ts` 规则，经本站 `/api/models/kicad` 读取），页面标明是"按封装匹配的标准模型"，不是器件本身的模型。Atrium 的 pod 板 59 个封装中 45 个匹配到（阻容 0201/0402、电感 0603、晶振 2016、DFN-8）；BGA/WLCSP/LGA/LED 阵列等没有对应标准模型的只显示焊盘。
+- 板框：EasyEDA 导出的 Altium ASCII 把真实板形画在 Keep-Out 层，板区域只是外接矩形；现在若 Keep-Out 层有闭合的线/圆弧环，就以最大的那个作为板框（Atrium pod 板因此是圆角长条形，而不是矩形）。

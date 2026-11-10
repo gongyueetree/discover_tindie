@@ -3,6 +3,8 @@ import * as CFB from "cfb";
 import { altiumBlocks, altiumProperties, altiumRecordList } from "./altium-records";
 import { attachAltiumModels } from "./altium-models";
 import { copperNames, readAltiumPours } from "./altium-pours";
+import { placedModel } from "./eagle";
+import { matchPackage, type PackagePad, type StandardModel } from "./package-models";
 import { altiumDesignators, readAltiumSilkscreen } from "./altium-silk";
 import { buildConnectivity, type KicadParseOutput } from "./kicad";
 import type { IrPoint, PartIr, PcbIr, SchematicIr, SourceAsset } from "./types";
@@ -450,11 +452,99 @@ export function parseAltiumAsciiPcb(bytes: Uint8Array, asset: SourceAsset, out: 
     result.zones.push({ id: `${id}:region${i}`, netId: net?.id, sourceNativeNetId: p.NET, layers: [l], sourceRef: { ...ref, nativeId: `Region:${i}` }, shape: { keepout: false, outline: pts, fills: [{ layer: l, points: pts }] } });
   });
 
+  // EasyEDA's Altium export draws the real board shape on the Keep-Out layer and leaves the board region a
+  // rectangle around it: a closed Keep-Out loop inside the region is the board's outline.
+  const loop = keepoutLoop(records, mil);
+  if (loop) result.boardOutline = loop.map((g, i) => ({ id: `${id}:edge${i}`, kind: g.mid ? "arc" : "line", geometry: g }));
+
+  // An ASCII board embeds no 3D model: a standard KiCad model matched by each footprint's pads
+  // (package-models.ts, as for EAGLE), said so — never presented as the part's own model (G12).
+  const matched = asciiStandardModels(of("component"), of("pad"), footprints, mil);
   const usedLayers = new Set([...result.pads.flatMap((p) => p.layers), ...result.tracks.map((t) => t.layer)]);
   result.layers = result.layers.filter((l) => usedLayers.has(l.name));
   out.pcbs.push(result);
   out.nets.push(...nets.values());
   const normalized = result.pads.length + result.tracks.length + result.footprints.length;
   out.normalized += normalized; out.recognized += normalized;
-  out.diagnostics.push(diagnostic("ALTIUM_ASCII_PCB", `AD PCB（ASCII 格式）已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条走线（含圆弧）、${result.vias.length} 个过孔和 ${result.zones.length} 块铜皮。ASCII 文件不含内嵌 3D 模型；元件丝印文字与自定义焊盘形状尚未绘制。`, "warning", "unsupported", ref, "preserved"));
+  out.diagnostics.push(diagnostic("ALTIUM_ASCII_PCB", `AD PCB（ASCII 格式）已解析 ${result.footprints.length} 个封装、${result.pads.length} 个焊盘、${result.tracks.length} 条走线（含圆弧）、${result.vias.length} 个过孔和 ${result.zones.length} 块铜皮。ASCII 文件不含内嵌 3D 模型：${matched} 个封装按焊盘匹配了 KiCad 标准 3D 模型（不是器件本身的模型），其余在 3D 中只显示焊盘。元件丝印文字与自定义焊盘形状尚未绘制。`, "warning", "unsupported", ref, "preserved"));
+}
+
+/**
+ * Standard models for an ASCII board's footprints (local change: ../../NOTICE.md). Each footprint's pads are
+ * taken into its own frame (Altium: y up; a bottom part is mirrored left to right, then turned), as the
+ * package matcher expects, and the model placed the way EAGLE's are (eagle.ts placedModel).
+ */
+function asciiStandardModels(components: Props[], pads: Props[], footprints: Map<string, PcbIr["footprints"][number]>, mil: (s?: string) => number) {
+  const byComponent = new Map<string, Props[]>();
+  for (const p of pads) if (p.COMPONENT !== undefined) byComponent.set(p.COMPONENT, [...(byComponent.get(p.COMPONENT) ?? []), p]);
+  const cache = new Map<string, StandardModel | null>();
+  let matched = 0;
+  components.forEach((c, i) => {
+    const key = c.ID ?? String(i), fp = footprints.get(key), own = byComponent.get(key) ?? [];
+    if (!fp || !own.length) return;
+    const bottom = (c.LAYER || "").toUpperCase() === "BOTTOM", rot = num(c, "ROTATION"), t = -rot * Math.PI / 180;
+    const cx = mil(c.X), cy = mil(c.Y);
+    const local: PackagePad[] = own.map((p) => {
+      const dx = mil(p.X) - cx, dy = mil(p.Y) - cy;
+      let x = dx * Math.cos(t) - dy * Math.sin(t);
+      const y = dx * Math.sin(t) + dy * Math.cos(t);
+      if (bottom) x = -x;
+      const relative = (((num(p, "ROTATION") - rot) % 180) + 180) % 180;
+      const across = Math.abs(relative - 90) < 1;
+      const w = mil(p.XSIZE ?? p.TOPXSIZE), h = mil(p.YSIZE ?? p.TOPYSIZE);
+      return { name: p.NAME || "", x: Number(x.toFixed(4)), y: Number(y.toFixed(4)), w: across ? h : w, h: across ? w : h, tht: mil(p.HOLESIZE) > 0 };
+    });
+    const prefix = (fp.reference.match(/^[A-Za-z]+/) ?? [""])[0].toUpperCase();
+    const signature = `${c.PATTERN ?? ""}\u0000${prefix}\u0000${local.map((p) => `${p.name}:${p.x},${p.y},${p.w},${p.h},${p.tht ? 1 : 0}`).sort().join(";")}`;
+    if (!cache.has(signature)) cache.set(signature, matchPackage({ name: c.PATTERN || "", prefix, pads: local, circle: null }).model);
+    const model = cache.get(signature);
+    if (!model) return;
+    fp.models = [placedModel(model, bottom)];
+    matched += 1;
+  });
+  return matched;
+}
+
+type Piece = { start: IrPoint; mid?: IrPoint; end: IrPoint };
+/** The largest closed loop of Keep-Out tracks and arcs (ends within 0.01 mm), in drawing order; null if none closes. */
+function keepoutLoop(records: Props[], mil: (s?: string) => number): Piece[] | null {
+  const pieces: Piece[] = [];
+  for (const r of records) {
+    if ((r.LAYER || "").toUpperCase() !== "KEEPOUT" || r.COMPONENT !== undefined && r.COMPONENT !== "65535") continue;
+    const kind = (r.RECORD || "").toLowerCase();
+    if (kind === "track") pieces.push({ start: pt(mil(r.X1), -mil(r.Y1)), end: pt(mil(r.X2), -mil(r.Y2)) });
+    else if (kind === "arc") {
+      const cx = mil(r["LOCATION.X"]), cy = mil(r["LOCATION.Y"]), rad = mil(r.RADIUS), a = num(r, "STARTANGLE"), sweep = ((num(r, "ENDANGLE") - a) % 360 + 360) % 360;
+      if (!sweep) continue;
+      const on = (deg: number) => pt(cx + rad * Math.cos(deg * Math.PI / 180), -(cy + rad * Math.sin(deg * Math.PI / 180)));
+      pieces.push({ start: on(a), mid: on(a + sweep / 2), end: on(a + sweep) });
+    }
+  }
+  if (pieces.length < 2 || pieces.length > 2000) return null;
+  const near = (a: IrPoint, b: IrPoint) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) < 0.01;
+  const used = new Set<number>();
+  let best: Piece[] | null = null, bestArea = 0;
+  for (let first = 0; first < pieces.length; first++) {
+    if (used.has(first)) continue;
+    const chain: Piece[] = [pieces[first]];
+    used.add(first);
+    for (let grown = true; grown && !near(chain[chain.length - 1].end, chain[0].start); ) {
+      grown = false;
+      const tail = chain[chain.length - 1].end;
+      for (let k = 0; k < pieces.length; k++) {
+        if (used.has(k)) continue;
+        const p = pieces[k];
+        if (near(p.start, tail)) chain.push(p);
+        else if (near(p.end, tail)) chain.push({ start: p.end, mid: p.mid, end: p.start });
+        else continue;
+        used.add(k); grown = true; break;
+      }
+    }
+    if (chain.length < 2 || !near(chain[chain.length - 1].end, chain[0].start)) continue;
+    const xs = chain.flatMap((c) => [c.start, c.mid, c.end].filter(Boolean).map((q) => Number(q!.x)));
+    const ys = chain.flatMap((c) => [c.start, c.mid, c.end].filter(Boolean).map((q) => Number(q!.y)));
+    const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    if (area > bestArea) { best = chain; bestArea = area; }
+  }
+  return best;
 }
