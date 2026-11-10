@@ -57,6 +57,7 @@ partdata 出于防爬设计**没有"列出全部设计"的接口**（只能按�
 | `AUTH_SECRET` | 是（原有） | 原有登录用；也用于签 GitHub 导入凭据（多实例部署时各实例必须一致） |
 | `POSTGRES_URL` 等 | 原有 | Resources TAB 和后台用，与原项目相同 |
 | `DIGIKEY_*` / `MOUSER_API_KEY` | 可选 | 数据库没有的型号和 BOM 报价 |
+| `EZPLM_API_KEY`（可选 `EZPLM_API_SECRET`、`EZPLM_DAILY_BUDGET`） | 可选 | 元器件搜索直接查 ezPLM 公开查询接口 |
 | `AZURE_TRANSLATOR_KEY` / `_REGION` | 可选 | 词表外的中文长描述机器翻译（非大模型） |
 
 后台 `/admin` 的 Dashboard 顶部新增 **Parts database** 状态卡：显示是否已配置、连接的主机、延迟、知识图谱快照规模，可一键重新检查（只有编辑/管理员能看到）。
@@ -473,3 +474,11 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
 **Open hardware 设计列表常显示 "Load failed"**（Safari 的网络层错误：请求在零件库慢的时候被网络或中间节点断开，不是服务器返回的错误）：
 - 服务器：一个模块 / 型号 / 系列拼好的设计列表在共享缓存（Redis `mk:pool:v1:*`）里保存 15 分钟，重复打开不再请求零件库；零件库每页最多等 12 秒。
 - 浏览器（`src/lib/maker/get-json.ts`）：请求断开或网关 502/503/504 时自动重试一次；仍失败就显示一句说明和「Try again」按钮，而不是浏览器的 "Load failed"。检查：`scripts/get-json-checks.ts`。
+
+## 33. 元器件搜索直接查 ezPLM（2026-11-10）
+
+- 接口：ezPLM 公开查询接口 `GET /api/v1/api-key/parts`（只读，只含白名单厂商，有每日调用上限）。签名按 ezPLM 的 demo：`X-API-Key`、`X-Timestamp`（秒）、`X-Nonce`、`X-Signature = base64url(HMAC-SHA256(key, METHOD\npath\n排序编码的query\n时间戳\nnonce))`。代码在 `src/lib/ezplm/client.ts`，只在服务器端，key 只放 Vercel 环境变量 `EZPLM_API_KEY`。
+- 搜索时和零件库同时查（不等零件库），结果排在零件库之后；同一型号 + 厂商两边都有时保留零件库那条（有详情、封装预览和开源设计）。ezPLM 独有的结果卡片来源显示 "ezPLM"，id 为 `ez:<ezPLM id>`。
+- 省额度：同一查询（不分大小写）缓存 24 小时（Redis，空结果也缓存）；全站每天最多 `EZPLM_DAILY_BUDGET` 次（默认 800），每个访客也有每日上限；ezPLM 返回 429 时暂停 1 小时，访客看到 "ezPLM's daily API quota is used up"。错误记在后台 Discover traffic →「DigiKey / Mouser / ezPLM errors」。
+- 零件库（ezplm_partdata）也用同一类 key 做补全；网站最好用单独的 key，否则两边共用每日额度。
+- 检查：`scripts/ezplm-checks.ts`（签名与 ezPLM demo 一致、字段映射、缓存、429 暂停）。

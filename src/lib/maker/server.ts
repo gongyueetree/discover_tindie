@@ -6,6 +6,7 @@ import { englishParts } from "./translation";
 import { keywordSearch } from "@/vendor/bom2buy/digikey";
 import { PartdataError } from "@/lib/partdata/client";
 import { searchPartdata, status as partdataStatus } from "@/lib/partdata/maker";
+import { ezplmConfigured, searchParts as ezplmSearch, EZPLM_SOURCE } from "@/lib/ezplm/client";
 import type { Part, ProviderStatus } from "./types";
 import { noteAsync, recordTerm } from "@/lib/maker-analytics";
 import { limitVisitor, reserveSupplierCall, supplierCached, supplierCacheKey, supplierCooldown, supplierCoolingDown, SupplierUnavailable, type Bucket, type Provider } from "./limits";
@@ -40,6 +41,7 @@ export function suppliersConnected() {
   return {
     digikey: !!process.env.DIGIKEY_CLIENT_ID && !!process.env.DIGIKEY_CLIENT_SECRET && process.env.DIGIKEY_ENV === "production",
     mouser: !!process.env.MOUSER_API_KEY,
+    ezplm: ezplmConfigured(),
   };
 }
 
@@ -52,6 +54,13 @@ export async function search(
   const parts: Part[] = [];
   const statuses: ProviderStatus[] = [];
   let catalogueExact = false;
+  // ezPLM's own catalogue runs alongside the parts database (it does not wait for it); its rows are
+  // added after the parts database's, so a part both know keeps the richer parts-database record.
+  const ezParts: Part[] = [];
+  const ezStatuses: ProviderStatus[] = [];
+  const ezplm = partdata
+    ? supplierLookup("ezplm", EZPLM_SOURCE, q, visitor, ezStatuses, ezParts, (k) => ezplmSearch(k, 10), deadline)
+    : Promise.resolve();
   if (partdata) try {
     const r = await searchPartdata(q, visitor);
     parts.push(...r.items);
@@ -61,7 +70,10 @@ export async function search(
     const err = asSourceError(e);
     // A too-short query is the visitor's input, not a source failure. A visitor over their daily
     // parts-database quota (429) must not be turned into paid distributor lookups instead.
-    if (err.status === 400 || err.status === 429) throw err;
+    if (err.status === 400 || err.status === 429) {
+      await ezplm;
+      throw err;
+    }
     statuses.push(
       partdataStatus(
         e instanceof PartdataError && e.code === "unconfigured" ? "unconfigured" : "error",
@@ -69,6 +81,9 @@ export async function search(
       ),
     );
   }
+  await ezplm;
+  parts.push(...ezParts);
+  statuses.push(...ezStatuses);
   if (!catalogueExact || includeSuppliers)
     await Promise.all([
       supplierLookup("digikey", "DigiKey direct", q, visitor, statuses, parts, digikeyParts, deadline),
@@ -92,7 +107,14 @@ export async function rateLimit(ip: string, bucket: Bucket = "api") {
   await limitVisitor(bucket, createHash("sha256").update(ip).digest("hex").slice(0, 32));
 }
 
-const COOLDOWN_MSG: Record<Provider, string> = { digikey: "DigiKey asked us to slow down; live prices resume shortly", mouser: "Mouser asked us to slow down; live prices resume shortly" };
+const NAME: Record<Provider, string> = { digikey: "DigiKey", mouser: "Mouser", ezplm: "ezPLM" };
+const COOLDOWN_MSG: Record<Provider, string> = {
+  digikey: "DigiKey asked us to slow down; live prices resume shortly",
+  mouser: "Mouser asked us to slow down; live prices resume shortly",
+  ezplm: "ezPLM asked us to slow down; its results return shortly",
+};
+/** Catalogue answers change rarely and every call counts against ezPLM's daily limit: kept a day. */
+const CACHE_SECONDS: Partial<Record<Provider, number>> = { ezplm: 86_400 };
 
 /**
  * One distributor lookup: shared cache first; otherwise a real call only if the distributor is not
@@ -131,14 +153,16 @@ async function supplierLookup(
       // The fetches below use the request's signal: at the deadline (or if the visitor leaves) the
       // network request itself is aborted. Quota reserved for a call already sent is not refunded.
       return load(q);
-    }, Date.now() + Math.max(0, left() - 4_000));
+    }, Date.now() + Math.max(0, left() - 4_000), CACHE_SECONDS[provider]);
     parts.push(...value.map((p) => ({ ...p, offers: p.offers.map((o) => ({ ...o })) })));
     statuses.push({ source, status: "ready" });
   } catch (e) {
     const m = e instanceof Error ? e.message : "";
-    const name = provider === "digikey" ? "DigiKey" : "Mouser";
+    const name = NAME[provider];
     const daily = m === "RATE_LIMITED" && !!(e as { daily?: boolean }).daily;
-    const reason = daily ? `${name}'s daily API quota is used up; live prices return when it resets` : COOLDOWN_MSG[provider];
+    const reason = daily
+      ? `${name}'s daily API quota is used up; ${provider === "ezplm" ? "its results" : "live prices"} return when it resets`
+      : COOLDOWN_MSG[provider];
     if (m === "RATE_LIMITED") {
       // A spent daily quota: try again in an hour; the per-minute limit: as long as asked (default 2 min).
       supplierCooldown(provider, daily ? 3600 : (e as { retryAfter?: number }).retryAfter || 120, reason);
@@ -154,8 +178,8 @@ async function supplierLookup(
           : m === "RATE_LIMITED"
             ? reason
             : /OAuth/.test(m)
-              ? `${provider === "digikey" ? "DigiKey" : "Mouser"} credentials rejected`
-              : `${provider === "digikey" ? "DigiKey" : "Mouser"} request failed`,
+              ? `${name} credentials rejected`
+              : `${name} request failed`,
     });
   }
 }
