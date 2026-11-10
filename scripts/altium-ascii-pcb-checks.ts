@@ -15,6 +15,18 @@ const lines = [
   "|RECORD=Arc|LAYER=BOTTOM|NET=0|WIDTH=8mil|LOCATION.X=200mil|LOCATION.Y=200mil|STARTANGLE=0|ENDANGLE=90|RADIUS=50mil",
   "|RECORD=Via|NET=1|HOLESIZE=10mil|X=800mil|Y=250mil|DIAMETER=20mil|STARTLAYER=TOP|ENDLAYER=BOTTOM",
   "|RECORD=Region|NET=0|LAYER=BOTTOM|KIND=0|KIND0=0|VX0=100mil|VY0=100mil|KIND1=0|VX1=300mil|VY1=100mil|KIND2=0|VX2=300mil|VY2=300mil",
+  // A 0402 resistor (KiCad R_0402_1005Metric pads: ±0.51 mm, 0.54 × 0.64 mm), turned 90° — and one on the bottom.
+  "|RECORD=Component|ID=1|LAYER=TOP|X=300mil|Y=400mil|ROTATION=90|PATTERN=R0402|SOURCEDESIGNATOR=R1",
+  "|RECORD=Pad|COMPONENT=1|NET=0|LAYER=TOP|NAME=1|HOLESIZE=0mil|X=300mil|Y=379.9213mil|XSIZE=21.2598mil|YSIZE=25.1969mil|SHAPE=RECTANGLE|ROTATION=90",
+  "|RECORD=Pad|COMPONENT=1|NET=1|LAYER=TOP|NAME=2|HOLESIZE=0mil|X=300mil|Y=420.0787mil|XSIZE=21.2598mil|YSIZE=25.1969mil|SHAPE=RECTANGLE|ROTATION=90",
+  "|RECORD=Component|ID=2|LAYER=BOTTOM|X=700mil|Y=400mil|ROTATION=0|PATTERN=R0402|SOURCEDESIGNATOR=R2",
+  "|RECORD=Pad|COMPONENT=2|NET=0|LAYER=BOTTOM|NAME=1|HOLESIZE=0mil|X=720.0787mil|Y=400mil|XSIZE=21.2598mil|YSIZE=25.1969mil|SHAPE=RECTANGLE|ROTATION=0",
+  "|RECORD=Pad|COMPONENT=2|NET=1|LAYER=BOTTOM|NAME=2|HOLESIZE=0mil|X=679.9213mil|Y=400mil|XSIZE=21.2598mil|YSIZE=25.1969mil|SHAPE=RECTANGLE|ROTATION=0",
+  // The real board shape on Keep-Out, inside the rectangular board region: two edges and two half circles.
+  "|RECORD=Track|LAYER=KEEPOUT|X1=200mil|Y1=100mil|X2=800mil|Y2=100mil|WIDTH=4mil",
+  "|RECORD=Arc|LAYER=KEEPOUT|WIDTH=4mil|LOCATION.X=800mil|LOCATION.Y=250mil|STARTANGLE=270|ENDANGLE=450|RADIUS=150mil",
+  "|RECORD=Track|LAYER=KEEPOUT|X1=800mil|Y1=400mil|X2=200mil|Y2=400mil|WIDTH=4mil",
+  "|RECORD=Arc|LAYER=KEEPOUT|WIDTH=4mil|LOCATION.X=200mil|LOCATION.Y=250mil|STARTANGLE=90|ENDANGLE=270|RADIUS=150mil",
   "",
 ];
 (async () => {
@@ -22,10 +34,16 @@ const lines = [
   const bundle: any = await parseEdaProject([{ path: "board.PcbDoc", bytes }] as any);
   const pcb = bundle.pcbs[0];
   assert.ok(pcb, "a PCB is produced");
-  assert.equal(pcb.boardOutline.length, 4, "outline: 4 edges (closing vertex not repeated)");
-  assert.equal(pcb.footprints.length, 1);
+  assert.deepEqual(pcb.boardOutline.map((e: any) => e.kind).sort(), ["arc", "arc", "line", "line"], "outline: the closed Keep-Out loop, not the board region");
+  assert.equal(pcb.footprints.length, 3);
   assert.equal(pcb.footprints[0].reference, "C1");
   assert.equal(pcb.footprints[0].padIds.length, 2);
+  // Standard models matched by the pads (package-models.ts), said so.
+  const [, r1, r2] = pcb.footprints;
+  assert.match(r1.models?.[0]?.path ?? "", /R_0402_1005Metric\.step$/, "turned top-side 0402 matched");
+  assert.equal(r1.models[0].standard.rule.length > 0, true);
+  assert.match(r2.models?.[0]?.path ?? "", /R_0402_1005Metric\.step$/, "bottom-side 0402 matched");
+  assert.equal(pcb.footprints[0].models, undefined, "C1's two pads are not a standard 0402 layout: no model");
   const [smd, tht] = pcb.pads;
   assert.equal(smd.padType, "smd");
   assert.equal(smd.shape, "rect");
@@ -36,8 +54,8 @@ const lines = [
   assert.deepEqual(tht.layers, ["*.Cu"]);
   assert.equal(tht.netName, "VCC");
   assert.equal(Number(pcb.pads[0].position.y).toFixed(3), "-6.350", "Y flipped like the binary reader");
-  assert.equal(pcb.tracks.filter((t: any) => t.kind === "segment").length, 1, "copper track");
-  assert.equal(pcb.tracks.filter((t: any) => t.kind === "arc").length, 1, "copper arc");
+  assert.equal(pcb.tracks.filter((t: any) => t.kind === "segment" && t.layer === "F.Cu").length, 1, "copper track");
+  assert.equal(pcb.tracks.filter((t: any) => t.kind === "arc" && t.layer === "B.Cu").length, 1, "copper arc");
   assert.equal(pcb.silkscreen.graphics.length, 1, "overlay line goes to the silkscreen");
   assert.equal(pcb.vias.length, 1);
   assert.equal(pcb.zones.length, 1, "free copper region");
