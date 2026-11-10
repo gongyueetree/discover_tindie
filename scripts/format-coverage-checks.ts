@@ -147,9 +147,11 @@ const results: string[] = [];
   r = await open([file("Gen7Board.sch", "v 20110115 2\nC 40300 40400 1 0 0 gnd-1.sym\n")]);
   assert.match(unsupportedCadReason(r.r.assets, r.bundle.diagnostics)!, /Gen7Board\.sch is a gEDA \/ Lepton \(gschem\) design/);
   r = await open([file("export.PcbDoc", "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00\n|RECORD=Track|LAYER=TOP|X1=0mil\n")]);
-  assert.match(unsupportedCadReason(r.r.assets, r.bundle.diagnostics)!, /export\.PcbDoc: an Altium PCB saved as ASCII/);
+  // An ASCII PcbDoc is now read (altium-ascii-pcb-checks.ts): a board, and no "unsupported" reason.
+  assert.equal(r.bundle.pcbs.length, 1, "ASCII PcbDoc read");
+  assert.equal(unsupportedCadReason(r.r.assets, r.bundle.diagnostics), undefined);
   assert.equal(unsupportedCadReason([{ path: "notes.txt", bytes: enc.encode("hello") }], []), undefined);
-  results.push("binary EAGLE / gEDA / ASCII PcbDoc / Fusion mechanical named");
+  results.push("binary EAGLE / gEDA / Fusion mechanical named; ASCII PcbDoc read");
 
   // ── GitHub discovery: Fusion documents and legacy KiCad projects ──
   const f = (path: string): RepoFile => ({ path, sha: "0", size: 10, type: "blob" });

@@ -486,3 +486,10 @@ googlecreativelab/open-nsynth-super（KiCad 4）只提交了 `custom.lib`，没�
   - ezPLM 的数据手册链接是带有效期的签名链接（`?e=` 约 40 分钟后过期），所以 ezPLM 结果的缓存时间改为"到最早一条签名链接过期前 5 分钟"（最少 10 分钟，最多 24 小时；没有签名链接或空结果仍为 24 小时）。
   - 网站没有配置 Azure 翻译（`AZURE_TRANSLATOR_KEY`）时，中文描述翻不出来，原来显示 "English description unavailable"；现在改为显示英文分类和封装（如 "Power management (PMIC) · SOT-23-6"）。原文仍在 originalText 里。
   - 词表补了"电源输入电压范围 / 输入电压范围 / 输出电压范围 / 电源电压范围"。
+
+## 34. Altium ASCII PcbDoc 可以显示了（2026-11-11）
+
+- 起因：Het-Bhavsar/Atrium 的 PcbDoc 是 Altium 的 **ASCII 格式**（每行一条 `|RECORD=…|KEY=VALUE`，EasyEDA 导出 Altium 时就是这种），原来只读二进制（OLE）PcbDoc，ASCII 的直接标成"不支持"，PCB 页显示 "No renderable PCB geometry"。
+- 现在 `parseAltiumAsciiPcb`（`src/vendor/canon/lib/eda/altium-native.ts`）读出：板框、封装、网络、焊盘（形状/尺寸/孔/层）、走线、圆弧、过孔、封装外的铜皮，以及丝印层的线和圆弧（3D 用）。层号与二进制读取器一致（TOP=1、MIDn、BOTTOM=32、MULTILAYER=*.Cu…）。ASCII 文件没有内嵌 3D 模型；丝印文字和自定义焊盘形状暂未绘制。
+- 一个工程里有多块板时，PCB 页默认打开内容最多的那块（例：Atrium 的 rev-b1_case_Case_PCB 只有一个 1.1×0.9 in 的板框，没有任何焊盘或走线，是空板；默认改为打开 rev-b1_pod_Pod_PCB：59 个封装、246 个焊盘、204 条走线）。
+- 检查：`scripts/altium-ascii-pcb-checks.ts`（合成板）；`format-coverage-checks.ts` 改为断言 ASCII PcbDoc 能读出板子。
