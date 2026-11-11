@@ -431,10 +431,14 @@ function silkArtwork(pcb: PcbIr, project: (point: NumericPoint) => NumericPoint,
   </g>;
 }
 
+/** Several boards: open on the one with the most on it (an outline-only board is still listed). PCB and 3D tabs alike. */
+export function fullestBoard(pcbs: CanonicalIrBundle["pcbs"]) {
+  return pcbs.reduce((best, p, i, all) => (p.pads.length + p.tracks.length > all[best].pads.length + all[best].tracks.length ? i : best), 0);
+}
+
 export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: CanonicalIrBundle; library?: boolean; assets?:InputAsset[] }) {
   const viewWidth = library ? VIEW_HEIGHT : VIEW_WIDTH;
-  // Several boards: open on the one with the most on it (an outline-only board is still listed).
-  const [documentIndex, setDocumentIndex] = useState(() => bundle.pcbs.reduce((best, p, i, all) => (p.pads.length + p.tracks.length > all[best].pads.length + all[best].tracks.length ? i : best), 0));
+  const [documentIndex, setDocumentIndex] = useState(() => fullestBoard(bundle.pcbs));
   const [zoom, setZoom] = useState(1);
   const [pan,setPan]=useState({x:0,y:0});
   const svgRef=useRef<SVGSVGElement>(null),drag=useRef<{id:number;x:number;y:number}|null>(null);
@@ -544,7 +548,7 @@ export function PcbViewer({ bundle, library = false, assets = [] }: { bundle: Ca
 }
 
 export function Board3DViewer({ bundle,assets=[],active=true }: { bundle: CanonicalIrBundle;assets?:InputAsset[];active?:boolean }) {
-  const [index,setIndex]=useState(0),[choice,setChoice]=useState("auto");
+  const [index,setIndex]=useState(()=>fullestBoard(bundle.pcbs)),[choice,setChoice]=useState("auto");
   const pcb=bundle.pcbs[Math.min(index,Math.max(0,bundle.pcbs.length-1))];
   // Tindie: EasyEDA Standard boards are in 10 mil with EasyEDA layer names; 3D gets millimetres and body envelopes (easyeda-3d.ts).
   const easy=useMemo(()=>pcb&&isEasyEdaStandard(pcb)?{pcb:pcbInMm(pcb),bodies:easyEdaBodies(pcb,assets)}:pcb&&isJlcProBoard(pcb)?{pcb:jlcProPcb3d(pcb),bodies:jlcProBodies(pcb)}:null,[pcb,assets]);
